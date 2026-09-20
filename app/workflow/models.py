@@ -18,6 +18,7 @@ class Extracted[T](Model):
     value: T | None = None
     confidence: float = Field(default=0, ge=0, le=1, allow_inf_nan=False)
     confirmed: StrictBool = False
+    bounding_regions: list[list[float]] = Field(default_factory=list)
 
 
 class Document(Model):
@@ -27,13 +28,22 @@ class Document(Model):
     name: Extracted[Text] = Field(default_factory=Extracted)
     birth_date: Extracted[date] = Field(default_factory=Extracted)
     service_month: Extracted[Text] = Field(default_factory=Extracted)
+    service_date: Extracted[date] = Field(default_factory=Extracted)
     provider_name: Extracted[Text] = Field(default_factory=Extracted)
     total_medical_cost_yen: Extracted[Yen] = Field(default_factory=Extracted)
     patient_paid_yen: Extracted[Yen] = Field(default_factory=Extracted)
     care_setting: Extracted[Literal["inpatient", "outpatient"]] = Field(default_factory=Extracted)
     discipline: Extracted[Literal["medical", "dental"]] = Field(default_factory=Extracted)
+    uninsured_cost_yen: Extracted[Yen] = Field(default_factory=Extracted)
+    private_room_cost_yen: Extracted[Yen] = Field(default_factory=Extracted)
+    meal_cost_yen: Extracted[Yen] = Field(default_factory=Extracted)
+    receipt_number: Extracted[Text] = Field(default_factory=Extracted)
+    document_type: Extracted[Literal["receipt", "itemized_statement"]] = Field(
+        default_factory=Extracted
+    )
     insurance_number: Extracted[Text] = Field(default_factory=Extracted)
     account_number: Extracted[Text] = Field(default_factory=Extracted)
+    content_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class Person(Model):

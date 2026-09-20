@@ -14,7 +14,7 @@ client = TestClient(app)
 
 def image_bytes():
     buffer = BytesIO()
-    Image.new("RGB", (2, 2), "white").save(buffer, format="PNG")
+    Image.new("RGB", (50, 50), "white").save(buffer, format="PNG")
     return buffer.getvalue()
 
 
