@@ -65,6 +65,33 @@ export AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT="https://<resource>.cognitiveservice
 export AZURE_DOCUMENT_INTELLIGENCE_KEY="<secret>"
 ```
 
+#### Azure Portalで行うこと
+
+1. Azure Portalで「Azure AI services」からDocument Intelligenceリソースを作成します。
+2. リソースの「Keys and Endpoint」を開き、EndpointとKEY 1（またはKEY 2）を確認します。
+3. 値はGitHub、README、スクリーンショット、チャットへ貼らず、次のWindows環境変数にだけ設定します。
+
+PowerShellを開き、実値に置き換えて実行します。`setx` の実行後に、PowerShellとVS Codeを
+いったん閉じて開き直してください。値の表示確認はせず、変数が存在するかだけ確認します。
+
+```powershell
+setx AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT "https://<resource>.cognitiveservices.azure.com"
+setx AZURE_DOCUMENT_INTELLIGENCE_KEY "<secret>"
+
+if ($env:AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT) { "endpoint: configured" } else { "endpoint: missing" }
+if ($env:AZURE_DOCUMENT_INTELLIGENCE_KEY) { "key: configured" } else { "key: missing" }
+```
+
+現在開いているPowerShellだけで一時的に試す場合は、次の形式を使います。この値はウィンドウを
+閉じると消えます。
+
+```powershell
+$env:AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT="https://<resource>.cognitiveservices.azure.com"
+$env:AZURE_DOCUMENT_INTELLIGENCE_KEY="<secret>"
+```
+
+両方が設定されているとAzure、両方または一方がない場合はMockOCRを使用します。
+
 処理は、画像検証、メモリー上でのSHA-256算出、Azureへの送信、非同期結果の取得、
 単語座標・信頼度を使った項目候補化、低信頼度判定、マスキング、確認JSON返却の順です。
 画像とOCR生データは保存せず、生の全文も返しません。同一プロセス内では画像を保存せず、
@@ -87,6 +114,51 @@ curl -X POST "http://127.0.0.1:8000/v2/documents/extract" \
 レスポンスの各項目には `value`、`confidence`、`confirmed`、
 `bounding_regions` が含まれます。既定では氏名・生年月日等を `***` にします。
 権限管理された確認用途でだけ `?mask=false` を使用してください。
+
+### 架空領収書による接続テスト
+
+実在の領収書は使いません。Windows標準の日本語フォントを使い、テスト専用画像を生成します。
+
+```powershell
+python scripts/generate_fictional_receipt.py
+```
+
+`tmp/fictional-receipt.png` が生成されます。`tmp/` はGit対象外です。この画像には、架空の氏名・
+医療機関名、日付、保険診療費、自己負担額、診療区分、保険外費用等だけが含まれます。
+
+標準テストはAzureへ通信しません。実通信は、2つのAzure環境変数を設定したうえで明示的に
+有効化した場合だけ1件実行します。
+
+```powershell
+pytest
+ruff check .
+ruff format --check .
+
+$env:RUN_AZURE_LIVE_TEST="1"
+pytest tests/test_azure_live.py -v
+Remove-Item Env:RUN_AZURE_LIVE_TEST
+```
+
+実通信テストの成功は、Azureへの送信と応答変換が完了したことを示します。個々の項目精度は、
+次のAPI応答の `value`、`confidence`、`missing_information` を職員が確認してください。
+
+```powershell
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+curl.exe -X POST "http://127.0.0.1:8000/v2/documents/extract" `
+  -H "Content-Type: image/png" `
+  --data-binary "@tmp/fictional-receipt.png"
+```
+
+確認・修正後は、抽出値と計算用 `expenses` の値を一致させ、各抽出項目の `confirmed` を
+`true` にして次の順に送ります。OCR値と利用者が修正した計算値が異なる場合、
+`INPUT_CONFLICT` により `manual_review_required` となり、計算結果は返しません。
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/v2/cases/validate" `
+  -H "Content-Type: application/json" --data-binary "@examples/workflow_case.json"
+curl.exe -X POST "http://127.0.0.1:8000/v2/cases/evaluate" `
+  -H "Content-Type: application/json" --data-binary "@examples/workflow_case.json"
+```
 
 現在の制限として、帳票レイアウトや表記揺れによって候補を抽出できない場合があります。
 和暦は自動変換せず、点数から総医療費への換算も行いません。二重送信検出は単一プロセス内の

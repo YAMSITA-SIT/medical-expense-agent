@@ -85,6 +85,24 @@ def test_azure_adapter_normal_response():
     assert document.patient_paid_yen.value == 30000
     assert document.document_type.value == "receipt"
     assert document.patient_paid_yen.bounding_regions
+    expected = {
+        "name": "架空太郎",
+        "birth_date": "2000-01-02",
+        "service_date": "2026-09-20",
+        "provider_name": "架空病院",
+        "total_medical_cost_yen": 100000,
+        "patient_paid_yen": 30000,
+        "care_setting": "inpatient",
+        "discipline": "medical",
+        "uninsured_cost_yen": 0,
+        "private_room_cost_yen": 0,
+        "meal_cost_yen": 0,
+        "receipt_number": "ABC-123",
+        "document_type": "receipt",
+    }
+    assert {
+        field: getattr(document, field).model_dump(mode="json")["value"] for field in expected
+    } == expected
 
 
 def test_environment_fallback(monkeypatch):
@@ -217,3 +235,17 @@ def test_user_correction_conflict_routes_to_staff():
     case["expenses"][0]["document_id"] = document["document_id"]
     case["expenses"][0]["patient_paid_yen"] = 299999
     assert client.post("/v2/cases/evaluate", json=case).json()["status"] == "manual_review_required"
+
+
+def test_same_image_hash_is_detected(monkeypatch):
+    monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", raising=False)
+    monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_KEY", raising=False)
+    payload = image_bytes()
+    first = client.post(
+        "/v2/documents/extract", content=payload, headers={"Content-Type": "image/png"}
+    )
+    second = client.post(
+        "/v2/documents/extract", content=payload, headers={"Content-Type": "image/png"}
+    )
+    assert first.status_code == second.status_code == 200
+    assert second.json()["duplicate_submission_suspected"] is True
