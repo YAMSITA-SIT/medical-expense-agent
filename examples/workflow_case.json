@@ -1,0 +1,33 @@
+{
+  "case_id": "fictional-case-1",
+  "target_month": "2026-07",
+  "primary_person_id": "fictional-person-1",
+  "income_category": "C",
+  "high_cost_benefit_count_previous_12_months": 0,
+  "people": [
+    {"person_id": "fictional-person-1", "birth_date": "1980-01-15", "insurer_id": "fictional-insurer", "benefit_household_id": "fictional-household"}
+  ],
+  "expenses": [
+    {
+      "expense_id": "fictional-expense-1",
+      "person_id": "fictional-person-1",
+      "service_month": "2026-07",
+      "provider_id": "fictional-hospital",
+      "care_setting": "inpatient",
+      "discipline": "medical",
+      "insurance_covered": true,
+      "cost_type": "insured",
+      "total_medical_cost_yen": 1000000,
+      "patient_paid_yen": 300000,
+      "receipt_total_medical_cost_yen": 1000000,
+      "receipt_patient_paid_yen": 300000,
+      "costs_separated": true
+    }
+  ],
+  "documents": [],
+  "receipt_state": "received",
+  "exception_screening_completed": true,
+  "household_verified": true,
+  "benefit_history_verified": true,
+  "events": []
+}
