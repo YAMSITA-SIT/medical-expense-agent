@@ -1,0 +1,1 @@
+{"name":"kokuho-benefit-agent-poc","private":true,"type":"module","scripts":{"test":"node tests/engine.test.mjs","start":"node scripts/serve.mjs"}}
