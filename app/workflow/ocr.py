@@ -9,7 +9,7 @@ import httpx
 from dataclasses import dataclass
 from datetime import date
 from io import BytesIO
-from typing import Any, Protocol
+from typing import Any, Protocol, Dict, List
 from urllib.parse import urlparse
 
 from PIL import Image, UnidentifiedImageError
@@ -241,6 +241,7 @@ def _date_value(item: dict[str, Any]) -> dict[str, Any]:
         item["value"], item["confidence"] = None, 0
     return item
 
+
 class OpenRouterOCR:
     """OpenRouter API (LLM) を利用したOCRプロバイダー"""
 
@@ -339,7 +340,7 @@ class OpenRouterOCR:
             # Documentモデルの形式に整形
             doc_dict = {
                 "document_id": f"openrouter-{digest[:20]}",
-                "source": f"openrouter:{self.model}",
+                "source": "ocr",  # Pydanticバリデーションを満たすため 'ocr' に設定
                 "content_hash": digest,
             }
 
@@ -352,6 +353,10 @@ class OpenRouterOCR:
 
             for field in fields:
                 val = parsed.get(field)
+                # 'null' や 'None' などの文字列が返された場合の正規化
+                if val in ["null", "None", ""]:
+                    val = None
+
                 doc_dict[field] = {
                     "value": val,
                     "confidence": 0.95 if val is not None else 0.0,
@@ -366,11 +371,12 @@ class OpenRouterOCR:
 
             return Document.model_validate(doc_dict)
 
-        except (httpx.HTTPError, ValueError, KeyError, json.JSONDecodeError) as error:
-            raise OCRProviderError() from error
+        except Exception as e:
+            raise OCRProviderError(f"Failed to parse OCR response: {e}") from e
         finally:
             if owned_client:
                 await client.aclose()
+
 
 def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
     lines = _lines(result)
@@ -475,3 +481,43 @@ def get_ocr_provider() -> OCRProvider:
         return AzureDocumentIntelligenceOCR(endpoint, key)
 
     return MockOCR()
+
+
+def check_exceptions_and_generate_advice(document: Document) -> dict[str, Any]:
+    """
+    Documentオブジェクトから「不鮮明（信頼度低）」「必須項目不足」などの例外を検知し、
+    AI Agentによる職員向けアドバイスを生成する
+    """
+    missing_fields = required_review_fields(document)
+    
+    if not missing_fields:
+        return {
+            "has_exception": False,
+            "issues": [],
+            "agent_advice": None
+        }
+
+    issues = []
+    details_for_prompt = []
+    
+    for item in missing_fields:
+        issue_str = f"【{item['question']}】({item['reason']})"
+        issues.append(issue_str)
+        details_for_prompt.append(f"- {item['reason']}")
+
+    prompt_issues = "\n".join(details_for_prompt)
+    
+    agent_advice = (
+        f"【AI Agentからの対応提案】\n"
+        f"以下の項目で読み取り不可または基準以下の信頼度が検出されました。\n"
+        f"{prompt_issues}\n\n"
+        f"【職員の推奨アクション】\n"
+        f"1. 添付された画像と該当箇所を目視で再確認・補正してください。\n"
+        f"2. 画像鮮明化等で判定が困難な場合は、申請者へ提出の再依頼または確認連絡を行ってください。"
+    )
+
+    return {
+        "has_exception": True,
+        "issues": issues,
+        "agent_advice": agent_advice
+    }
