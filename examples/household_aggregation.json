@@ -1,0 +1,29 @@
+{
+  "target_month": "2026-09",
+  "primary_person_id": "fictional-person-001",
+  "primary_age": 45,
+  "insurer_id": "fictional-insurer-001",
+  "income_category": "D",
+  "high_cost_benefit_count_previous_12_months": 3,
+  "expenses": [
+    {
+      "person_id": "fictional-person-001",
+      "age": 45,
+      "insurer_id": "fictional-insurer-001",
+      "calculation_unit_id": "hospital-a-medical-outpatient",
+      "insurance_covered": true,
+      "total_medical_cost_yen": 200000,
+      "patient_paid_yen": 60000
+    },
+    {
+      "person_id": "fictional-family-001",
+      "age": 42,
+      "insurer_id": "fictional-insurer-001",
+      "calculation_unit_id": "hospital-b-medical-inpatient",
+      "insurance_covered": true,
+      "total_medical_cost_yen": 300000,
+      "patient_paid_yen": 90000
+    }
+  ]
+}
+
