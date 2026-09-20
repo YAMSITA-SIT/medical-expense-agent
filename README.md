@@ -25,7 +25,7 @@
 ## 対応していないもの
 
 - フロントエンド、React、HTML、CSS
-- OCR、生成AI、データベース
+- 生成AI、データベース
 - 70歳以上、後期高齢者医療制度
 - 年間上限の計算
 - 特定疾病の自己負担軽減
@@ -33,6 +33,65 @@
 - 医療費控除や自治体独自助成など、高額療養費以外の制度
 
 未対応の年齢・診療月は、既知の制度から推測せず `unsupported` を返します。
+
+## 実OCR（Azure AI Document Intelligence）
+
+確認日：2026年9月20日
+
+| 項目 | 採用仕様 |
+|---|---|
+| API・モデル | Document Intelligence v4.0 GA、REST API `2024-11-30`、Readモデル `prebuilt-read` |
+| 日本語 | 印刷文字の抽出に対応。Readモデルの日本語手書き文字も `ja` として対応 |
+| 入力形式 | Azure側はPDF、JPEG/JPG、PNG、BMP、TIFF、HEIF、Office/HTML等に対応。本APIは安全なPoC範囲としてPNG/JPEGだけを受け付ける |
+| Azure側サイズ上限 | F0は4 MB、S0は500 MB。本API独自上限は5 MiB（F0利用時は4 MB以下にする） |
+| 画像寸法 | Azure要件は50×50～10,000×10,000ピクセル。本APIも同じ寸法範囲で検証 |
+| 認証 | Azureリソースのendpointと、`Ocp-Apim-Subscription-Key` ヘッダーのAPIキー |
+
+公式資料：
+
+- [Read OCRモデル、形式・サイズ・寸法・モデルID](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/prebuilt/read?view=doc-intel-4.0.0)
+- [Read/Layoutの日本語対応](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/language-support/ocr?view=doc-intel-4.0.0)
+- [サービスのクォータと上限](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/service-limits?view=doc-intel-4.0.0)
+- [Analyze Document REST APIと認証](https://learn.microsoft.com/en-us/rest/api/aiservices/document-models/analyze-document?view=rest-aiservices-v4.0%20%282024-11-30%29)
+
+### 接続設定
+
+`.env.example` を参照し、実行環境へ次の2変数を設定します。値をファイルやGitへ
+コミットしないでください。両方が揃ったときだけAzureを利用し、それ以外はMockOCRへ
+安全にフォールバックします。
+
+```bash
+export AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT="https://<resource>.cognitiveservices.azure.com"
+export AZURE_DOCUMENT_INTELLIGENCE_KEY="<secret>"
+```
+
+処理は、画像検証、メモリー上でのSHA-256算出、Azureへの送信、非同期結果の取得、
+単語座標・信頼度を使った項目候補化、低信頼度判定、マスキング、確認JSON返却の順です。
+画像とOCR生データは保存せず、生の全文も返しません。同一プロセス内では画像を保存せず、
+有効期限10分のハッシュだけで二重送信候補を検出します。
+
+抽出候補は氏名、生年月日、診療年月日、医療機関名、保険診療の総医療費、自己負担額、
+入院・外来、医科・歯科、保険外費用、差額ベッド代、食事療養費、領収書番号、
+領収書・診療明細書の区別です。ラベルに基づく候補抽出であり、値を推測しません。
+必須候補がない、または信頼度0.90未満なら `manual_review_required` と
+`calculation_result: null` を返します。
+
+### OCR API利用例
+
+```bash
+curl -X POST "http://127.0.0.1:8000/v2/documents/extract" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @receipt.jpg
+```
+
+レスポンスの各項目には `value`、`confidence`、`confirmed`、
+`bounding_regions` が含まれます。既定では氏名・生年月日等を `***` にします。
+権限管理された確認用途でだけ `?mask=false` を使用してください。
+
+現在の制限として、帳票レイアウトや表記揺れによって候補を抽出できない場合があります。
+和暦は自動変換せず、点数から総医療費への換算も行いません。二重送信検出は単一プロセス内の
+短時間検出で、再起動・複数ワーカーをまたぎません。Azureの実通信試験には利用者側の
+Azureリソースと認証情報が必要です。
 
 ## 所得区分
 
@@ -187,7 +246,7 @@ ruff format --check .
 
 ```text
 画像（PNG/JPEG、最大5MiB）
-  -> OCR抽出（現在は固定の架空データを返すMockOCR）
+  -> OCR抽出（Azure設定時は実OCR、未設定時は固定の架空データを返すMockOCR）
   -> 項目別の値・信頼度・確認状態をJSONで返却
   -> 利用者または職員が確認・修正
   -> /v2/cases/validate で不足・例外を検査
@@ -195,9 +254,10 @@ ruff format --check .
   -> 次工程へ渡せるJSONを返却
 ```
 
-OCRは `app/workflow/ocr.py` の `OCRProvider` インターフェースで交換できます。現在の
-`MockOCR` は画像を読み取らず、固定の架空データを返します。本物のOCR結果と誤認しないよう、
-レスポンスの `source` と `notice` に明示しています。画像バイト列は処理中のメモリーだけで扱い、
+OCRは `app/workflow/ocr.py` の `OCRProvider` インターフェースで交換できます。
+`AzureDocumentIntelligenceOCR` と `MockOCR` を実装しています。MockOCRは画像を読み取らず、
+固定の架空データを返します。本物のOCR結果と誤認しないよう、レスポンスの `source` と
+`notice` に明示しています。画像バイト列は処理中のメモリーだけで扱い、
 ファイルやデータベースに保存しません。
 
 ### v2のステータス

@@ -5,7 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.rules.metadata import WORKFLOW_RULES
 from app.workflow.codes import EXCEPTION_RULES, Status
 from app.workflow.models import CaseRequest, CaseResponse
-from app.workflow.ocr import MAX_IMAGE_BYTES, OCRProvider, get_ocr_provider, validate_image
+from app.workflow.ocr import (
+    MAX_IMAGE_BYTES,
+    OCRProvider,
+    duplicate_detector,
+    get_ocr_provider,
+    image_hash,
+    required_review_fields,
+    validate_image,
+)
 from app.workflow.privacy import mask_sensitive
 from app.workflow.service import process
 
@@ -30,6 +38,8 @@ async def extract_document(
         validate_image(bytes(data), media_type)
     except ValueError:
         raise HTTPException(422, "画像形式または画素数が無効です") from None
+    digest = image_hash(bytes(data))
+    duplicate = duplicate_detector.check_and_record(digest)
     try:
         document = await provider.extract(bytes(data), media_type)
     except Exception:
@@ -38,13 +48,19 @@ async def extract_document(
     finally:
         data.clear()
     result = document.model_dump(mode="json")
+    missing = required_review_fields(document) if document.source == "ocr" else []
     return {
         "status": Status.REVIEW,
         "document": mask_sensitive(result) if mask else result,
+        "missing_information": missing,
+        "calculation_result": None,
+        "duplicate_submission_suspected": duplicate,
         "requires_confirmation": True,
-        "notice": "mockは画像内容を読まず固定の架空データを返します。"
-        "抽出値を確認・修正し、各項目のconfirmedをtrueにして送信してください。"
-        "mask=trueの伏字を計算入力へ転記しないでください。",
+        "notice": (
+            "MockOCRは画像内容を読まず固定の架空データを返します。"
+            if document.source == "mock"
+            else "OCR抽出値は候補です。確認・修正し、各項目のconfirmedをtrueにしてください。"
+        ),
     }
 
 
