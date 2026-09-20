@@ -71,19 +71,24 @@ export AZURE_DOCUMENT_INTELLIGENCE_KEY="<secret>"
 2. リソースの「Keys and Endpoint」を開き、EndpointとKEY 1（またはKEY 2）を確認します。
 3. 値はGitHub、README、スクリーンショット、チャットへ貼らず、次のWindows環境変数にだけ設定します。
 
-PowerShellを開き、実値に置き換えて実行します。`setx` の実行後に、PowerShellとVS Codeを
-いったん閉じて開き直してください。値の表示確認はせず、変数が存在するかだけ確認します。
+初心者には、キーがPowerShellの履歴に残らないようWindowsの画面から設定する方法を推奨します。
+
+1. スタートメニューで「環境変数」と検索します。
+2. 「システム環境変数の編集」→「環境変数」を開きます。
+3. 上側の「ユーザー環境変数」で「新規」を押し、次の2件を1件ずつ登録します。
+   - 変数名 `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`、値はAzure PortalのEndpoint
+   - 変数名 `AZURE_DOCUMENT_INTELLIGENCE_KEY`、値はAzure PortalのKEY 1またはKEY 2
+4. 「OK」で閉じ、PowerShellとVS Codeをいったん終了して開き直します。
+
+PowerShellでは実値を表示せず、変数が存在するかだけ確認します。
 
 ```powershell
-setx AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT "https://<resource>.cognitiveservices.azure.com"
-setx AZURE_DOCUMENT_INTELLIGENCE_KEY "<secret>"
-
 if ($env:AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT) { "endpoint: configured" } else { "endpoint: missing" }
 if ($env:AZURE_DOCUMENT_INTELLIGENCE_KEY) { "key: configured" } else { "key: missing" }
 ```
 
-現在開いているPowerShellだけで一時的に試す場合は、次の形式を使います。この値はウィンドウを
-閉じると消えます。
+現在開いているPowerShellだけで一時的に試す場合は次の形式も使えますが、コマンド履歴に
+残る可能性があります。共有PCでは使わず、試験後はウィンドウを閉じてください。
 
 ```powershell
 $env:AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT="https://<resource>.cognitiveservices.azure.com"
