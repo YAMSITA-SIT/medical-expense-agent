@@ -98,9 +98,7 @@ def to_handoff_json(
             "symbol": _value(document, "insurance_symbol"),
             "number": _value(document, "insurance_member_number"),
         },
-        "confidence": {
-            path: _confidence(document, field) for path, field in _FIELD_PATHS.items()
-        },
+        "confidence": {path: _confidence(document, field) for path, field in _FIELD_PATHS.items()},
         "missing_fields": missing_fields,
         "low_confidence_fields": low_confidence_fields,
         "validation_warnings": [*quality_issues, *consistency_issues],
