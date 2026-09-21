@@ -57,9 +57,7 @@ def test_missing_and_low_confidence_require_review():
 
 def test_inconsistent_amounts_require_review():
     result = to_handoff_json(
-        fictional_document(
-            insurance_covered_amount_yen={"value": 200000, "confidence": 0.99}
-        )
+        fictional_document(insurance_covered_amount_yen={"value": 200000, "confidence": 0.99})
     )
     assert result["validation_warnings"]
     assert result["needs_human_review"] is True
