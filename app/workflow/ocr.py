@@ -1,18 +1,18 @@
 import asyncio
+import base64
 import hashlib
+import json
 import os
 import re
 import time
-import base64
-import json
-import httpx
 from dataclasses import dataclass
 from datetime import date
 from io import BytesIO
-from typing import Any, Protocol, Dict, List
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
-from PIL import Image, UnidentifiedImageError
+import httpx
+from PIL import Image, ImageFilter, ImageStat, UnidentifiedImageError
 
 from app.workflow.codes import OCR_MIN_CONFIDENCE
 from app.workflow.models import Document
@@ -66,6 +66,21 @@ class DuplicateDetector:
 duplicate_detector = DuplicateDetector()
 
 
+def image_quality_issues(data: bytes) -> list[str]:
+    """Conservative preflight hints; OCR confidence remains the final readability signal."""
+    issues: list[str] = []
+    with Image.open(BytesIO(data)) as image:
+        grayscale = image.convert("L")
+        if ImageStat.Stat(grayscale).stddev[0] < 12:
+            issues.append("画像のコントラストが低いため、原本との目視確認が必要です")
+        edges = grayscale.filter(ImageFilter.FIND_EDGES)
+        if ImageStat.Stat(edges).mean[0] < 2:
+            issues.append("画像が不鮮明な可能性があります")
+        if image.getexif().get(274) not in {None, 1}:
+            issues.append("画像の向き補正情報があるため、傾き・回転を確認してください")
+    return issues
+
+
 def validate_image(data: bytes, media_type: str) -> None:
     try:
         with Image.open(BytesIO(data)) as image:
@@ -108,10 +123,310 @@ class MockOCR:
                         "meal_cost_yen": 0,
                         "receipt_number": "FICTIONAL-001",
                         "document_type": "receipt",
+                        "issue_date": "2026-07-15",
+                        "insurance_covered_amount_yen": 700000,
+                        "department": "内科",
+                        "insurer_number": "00000000",
+                        "insurance_symbol": "架空",
+                        "insurance_member_number": "0001",
                     }.items()
                 },
+                "raw_text": (
+                    "領収書\n患者氏名 架空の患者A\n架空病院A\n"
+                    "診療日 2026年7月15日\n総医療費 1,000,000円\n"
+                    "保険適用額 700,000円\n自己負担額 300,000円"
+                ),
             }
         )
+
+
+class OrcaRouterOCR:
+    """OrcaRouterを利用し、セキュリティ・コスト・品質を最適化するOCRプロバイダー"""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "openai/gpt-4o-mini",
+        client: httpx.AsyncClient | None = None,
+        timeout_seconds: float = OCR_TIMEOUT_SECONDS,
+    ) -> None:
+        self.api_key = api_key or os.getenv("ORCAROUTER_API_KEY")
+        base_url = os.getenv("ORCAROUTER_BASE_URL", "https://api.orcarouter.com/v1")
+        self.endpoint = f"{base_url.rstrip('/')}/chat/completions"
+        self.model = os.getenv("ORCAROUTER_MODEL", model)
+        self.client = client
+        self.timeout_seconds = timeout_seconds
+
+    async def extract(self, image: bytes, media_type: str) -> Document:
+        if not self.api_key:
+            raise OCRProviderError("ORCAROUTER_API_KEY is not configured")
+
+        base64_image = base64.b64encode(image).decode("utf-8")
+        data_url = f"data:{media_type};base64,{base64_image}"
+
+        prompt = """
+        添付された医療機関の領収書・明細書画像から、以下の項目を抽出して指定のJSON形式で返してください。
+        読み取れない項目は null にしてください。
+        
+        抽出項目:
+        1. 氏名 (name)
+        2. 生年月日 (birth_date: YYYY-MM-DD)
+        3. 診療年月日 (service_date: YYYY-MM-DD)
+        4. 医療機関名 (provider_name)
+        5. 総医療費 (total_medical_cost_yen: 数値)
+        6. 自己負担額 (patient_paid_yen: 数値)
+        7. 入院/外来 (care_setting: "inpatient" または "outpatient")
+        8. 医科/歯科 (discipline: "medical" または "dental")
+        9. 保険外費用 (uninsured_cost_yen: 数値)
+        10. 差額ベッド代 (private_room_cost_yen: 数値)
+        11. 食事療養費 (meal_cost_yen: 数値)
+        12. 領収書番号 (receipt_number)
+        13. 書類種別 (document_type: "receipt" または "itemized_statement")
+
+        出力フォーマット(JSONのみ):
+        {
+          "name": "...",
+          "birth_date": "YYYY-MM-DD",
+          "service_date": "YYYY-MM-DD",
+          "provider_name": "...",
+          "total_medical_cost_yen": 10000,
+          "patient_paid_yen": 3000,
+          "care_setting": "outpatient",
+          "discipline": "medical",
+          "uninsured_cost_yen": 0,
+          "private_room_cost_yen": 0,
+          "meal_cost_yen": 0,
+          "receipt_number": "...",
+          "document_type": "receipt"
+        }
+        """
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": self.model,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+        }
+
+        owned_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=self.timeout_seconds)
+
+        try:
+            response = await client.post(self.endpoint, headers=headers, json=payload)
+            if response.status_code != 200:
+                raise OCRProviderError()
+
+            res_data = response.json()
+            content = res_data["choices"][0]["message"]["content"]
+            parsed = json.loads(content)
+
+            digest = image_hash(image)
+            service_date_val = parsed.get("service_date")
+            service_month_val = service_date_val[:7] if service_date_val else None
+
+            doc_dict = {
+                "document_id": f"orcarouter-{digest[:20]}",
+                "source": "ocr",
+                "content_hash": digest,
+            }
+
+            fields = [
+                "name",
+                "birth_date",
+                "service_date",
+                "provider_name",
+                "total_medical_cost_yen",
+                "patient_paid_yen",
+                "care_setting",
+                "discipline",
+                "uninsured_cost_yen",
+                "private_room_cost_yen",
+                "meal_cost_yen",
+                "receipt_number",
+                "document_type",
+            ]
+
+            for field in fields:
+                val = parsed.get(field)
+                if val in ["null", "None", ""]:
+                    val = None
+
+                doc_dict[field] = {
+                    "value": val,
+                    "confidence": 0.95 if val is not None else 0.0,
+                    "confirmed": False,
+                }
+
+            doc_dict["service_month"] = {
+                "value": service_month_val,
+                "confidence": 0.95 if service_month_val else 0.0,
+                "confirmed": False,
+            }
+
+            doc_dict["raw_text"] = parsed.get("raw_text")
+            return Document.model_validate(doc_dict)
+
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise OCRProviderError() from error
+        finally:
+            if owned_client:
+                await client.aclose()
+
+
+class OpenRouterOCR:
+    """OpenRouter API を利用したOCRプロバイダー"""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = "openai/gpt-4o-mini",
+        client: httpx.AsyncClient | None = None,
+        timeout_seconds: float = OCR_TIMEOUT_SECONDS,
+    ) -> None:
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        self.model = os.getenv("OPENROUTER_MODEL", model)
+        self.endpoint = "https://openrouter.ai/api/v1/chat/completions"
+        self.client = client
+        self.timeout_seconds = timeout_seconds
+
+    async def extract(self, image: bytes, media_type: str) -> Document:
+        if not self.api_key:
+            raise OCRProviderError("OPENROUTER_API_KEY is not configured")
+
+        base64_image = base64.b64encode(image).decode("utf-8")
+        data_url = f"data:{media_type};base64,{base64_image}"
+
+        prompt = """
+        添付された医療機関の領収書・明細書画像から、以下の項目を抽出して指定のJSON形式で返してください。
+        読み取れない項目は null にしてください。
+        
+        抽出項目:
+        1. 氏名 (name)
+        2. 生年月日 (birth_date: YYYY-MM-DD)
+        3. 診療年月日 (service_date: YYYY-MM-DD)
+        4. 医療機関名 (provider_name)
+        5. 総医療費 (total_medical_cost_yen: 数値)
+        6. 自己負担額 (patient_paid_yen: 数値)
+        7. 入院/外来 (care_setting: "inpatient" または "outpatient")
+        8. 医科/歯科 (discipline: "medical" または "dental")
+        9. 保険外費用 (uninsured_cost_yen: 数値)
+        10. 差額ベッド代 (private_room_cost_yen: 数値)
+        11. 食事療養費 (meal_cost_yen: 数値)
+        12. 領収書番号 (receipt_number)
+        13. 書類種別 (document_type: "receipt" または "itemized_statement")
+
+        出力フォーマット(JSONのみ):
+        {
+          "name": "...",
+          "birth_date": "YYYY-MM-DD",
+          "service_date": "YYYY-MM-DD",
+          "provider_name": "...",
+          "total_medical_cost_yen": 10000,
+          "patient_paid_yen": 3000,
+          "care_setting": "outpatient",
+          "discipline": "medical",
+          "uninsured_cost_yen": 0,
+          "private_room_cost_yen": 0,
+          "meal_cost_yen": 0,
+          "receipt_number": "...",
+          "document_type": "receipt"
+        }
+        """
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": self.model,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+        }
+
+        owned_client = self.client is None
+        client = self.client or httpx.AsyncClient(timeout=self.timeout_seconds)
+
+        try:
+            response = await client.post(self.endpoint, headers=headers, json=payload)
+            if response.status_code != 200:
+                raise OCRProviderError()
+
+            res_data = response.json()
+            content = res_data["choices"][0]["message"]["content"]
+            parsed = json.loads(content)
+
+            digest = image_hash(image)
+            service_date_val = parsed.get("service_date")
+            service_month_val = service_date_val[:7] if service_date_val else None
+
+            doc_dict = {
+                "document_id": f"openrouter-{digest[:20]}",
+                "source": "ocr",
+                "content_hash": digest,
+            }
+
+            fields = [
+                "name",
+                "birth_date",
+                "service_date",
+                "provider_name",
+                "total_medical_cost_yen",
+                "patient_paid_yen",
+                "care_setting",
+                "discipline",
+                "uninsured_cost_yen",
+                "private_room_cost_yen",
+                "meal_cost_yen",
+                "receipt_number",
+                "document_type",
+            ]
+
+            for field in fields:
+                val = parsed.get(field)
+                if val in ["null", "None", ""]:
+                    val = None
+
+                doc_dict[field] = {
+                    "value": val,
+                    "confidence": 0.95 if val is not None else 0.0,
+                    "confirmed": False,
+                }
+
+            doc_dict["service_month"] = {
+                "value": service_month_val,
+                "confidence": 0.95 if service_month_val else 0.0,
+                "confirmed": False,
+            }
+
+            doc_dict["raw_text"] = parsed.get("raw_text")
+            return Document.model_validate(doc_dict)
+
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise OCRProviderError() from error
+        finally:
+            if owned_client:
+                await client.aclose()
 
 
 class AzureDocumentIntelligenceOCR:
@@ -152,8 +467,9 @@ class AzureDocumentIntelligenceOCR:
             valid_operation_host = (
                 operation_url and urlparse(operation_url).netloc == urlparse(self.endpoint).netloc
             )
-            if not valid_operation_host:
+            if not valid_operation_host or not operation_url:
                 raise OCRProviderError()
+
             deadline = time.monotonic() + self.timeout_seconds
             while time.monotonic() < deadline:
                 poll = await client.get(
@@ -242,142 +558,6 @@ def _date_value(item: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
-class OpenRouterOCR:
-    """OpenRouter API (LLM) を利用したOCRプロバイダー"""
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-        model: str = "openai/gpt-4o-mini",
-        client: httpx.AsyncClient | None = None,
-        timeout_seconds: float = OCR_TIMEOUT_SECONDS,
-    ) -> None:
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        self.model = model
-        self.endpoint = "https://openrouter.ai/api/v1/chat/completions"
-        self.client = client
-        self.timeout_seconds = timeout_seconds
-
-    async def extract(self, image: bytes, media_type: str) -> Document:
-        if not self.api_key:
-            raise OCRProviderError("OPENROUTER_API_KEY is not configured")
-
-        base64_image = base64.b64encode(image).decode("utf-8")
-        data_url = f"data:{media_type};base64,{base64_image}"
-
-        prompt = """
-        添付された医療機関の領収書・明細書画像から、以下の項目を抽出して指定のJSON形式で返してください。
-        読み取れない項目は null にしてください。
-        
-        抽出項目:
-        1. 氏名 (name)
-        2. 生年月日 (birth_date: YYYY-MM-DD)
-        3. 診療年月日 (service_date: YYYY-MM-DD)
-        4. 医療機関名 (provider_name)
-        5. 総医療費 (total_medical_cost_yen: 数値)
-        6. 自己負担額 (patient_paid_yen: 数値)
-        7. 入院/外来 (care_setting: "inpatient" または "outpatient")
-        8. 医科/歯科 (discipline: "medical" または "dental")
-        9. 保険外費用 (uninsured_cost_yen: 数値)
-        10. 差額ベッド代 (private_room_cost_yen: 数値)
-        11. 食事療養費 (meal_cost_yen: 数値)
-        12. 領収書番号 (receipt_number)
-        13. 書類種別 (document_type: "receipt" または "itemized_statement")
-
-        出力フォーマット(JSONのみ):
-        {
-          "name": "...",
-          "birth_date": "YYYY-MM-DD",
-          "service_date": "YYYY-MM-DD",
-          "provider_name": "...",
-          "total_medical_cost_yen": 10000,
-          "patient_paid_yen": 3000,
-          "care_setting": "outpatient",
-          "discipline": "medical",
-          "uninsured_cost_yen": 0,
-          "private_room_cost_yen": 0,
-          "meal_cost_yen": 0,
-          "receipt_number": "...",
-          "document_type": "receipt"
-        }
-        """
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        payload = {
-            "model": self.model,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                }
-            ],
-        }
-
-        owned_client = self.client is None
-        client = self.client or httpx.AsyncClient(timeout=self.timeout_seconds)
-
-        try:
-            response = await client.post(self.endpoint, headers=headers, json=payload)
-            if response.status_code != 200:
-                raise OCRProviderError()
-
-            res_data = response.json()
-            content = res_data["choices"][0]["message"]["content"]
-            parsed = json.loads(content)
-
-            digest = image_hash(image)
-            service_date_val = parsed.get("service_date")
-            service_month_val = service_date_val[:7] if service_date_val else None
-
-            # Documentモデルの形式に整形
-            doc_dict = {
-                "document_id": f"openrouter-{digest[:20]}",
-                "source": "ocr",  # Pydanticバリデーションを満たすため 'ocr' に設定
-                "content_hash": digest,
-            }
-
-            fields = [
-                "name", "birth_date", "service_date", "provider_name",
-                "total_medical_cost_yen", "patient_paid_yen", "care_setting",
-                "discipline", "uninsured_cost_yen", "private_room_cost_yen",
-                "meal_cost_yen", "receipt_number", "document_type"
-            ]
-
-            for field in fields:
-                val = parsed.get(field)
-                # 'null' や 'None' などの文字列が返された場合の正規化
-                if val in ["null", "None", ""]:
-                    val = None
-
-                doc_dict[field] = {
-                    "value": val,
-                    "confidence": 0.95 if val is not None else 0.0,
-                    "confirmed": False,
-                }
-
-            doc_dict["service_month"] = {
-                "value": service_month_val,
-                "confidence": 0.95 if service_month_val else 0.0,
-                "confirmed": False,
-            }
-
-            return Document.model_validate(doc_dict)
-
-        except Exception as e:
-            raise OCRProviderError(f"Failed to parse OCR response: {e}") from e
-        finally:
-            if owned_client:
-                await client.aclose()
-
-
 def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
     lines = _lines(result)
     service_date = _date_value(
@@ -399,6 +579,7 @@ def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
         "領収書": "receipt",
     }.get(doc_type["value"])
     digest = image_hash(image)
+    raw_text = "\n".join(line.text for line in lines)
     return Document.model_validate(
         {
             "document_id": f"ocr-{digest[:20]}",
@@ -432,6 +613,31 @@ def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
                 r"(?:領収書?番号)?\s*[:：]?\s*([A-Za-z0-9\-]{3,40})",
             ),
             "document_type": doc_type,
+            "issue_date": _date_value(
+                _field(
+                    lines,
+                    r"発行日|領収日",
+                    r"((?:19|20)\d{2}[年/.\-]\d{1,2}[月/.\-]\d{1,2}日?)",
+                )
+            ),
+            "insurance_covered_amount_yen": _yen(lines, r"保険適用額|保険負担額|保険者負担"),
+            "department": _field(
+                lines,
+                r"診療科|科名|内科|外科|小児科|皮膚科|眼科|耳鼻",
+                r"(?:診療科|科名)?\s*[:：]?\s*([^\s:：]{1,30}科)",
+            ),
+            "insurer_number": _field(
+                lines, r"保険者番号", r"(?:保険者番号)?\s*[:：]?\s*([0-9０-９]{6,8})"
+            ),
+            "insurance_symbol": _field(
+                lines, r"記号", r"(?:記号)\s*[:：]?\s*([A-Za-z0-9０-９ぁ-んァ-ヶ一-龠\-]{1,30})"
+            ),
+            "insurance_member_number": _field(
+                lines,
+                r"(?:被保険者)?番号",
+                r"(?:被保険者)?番号\s*[:：]?\s*([A-Za-z0-9０-９\-]{1,30})",
+            ),
+            "raw_text": raw_text,
         }
     )
 
@@ -469,6 +675,9 @@ def required_review_fields(document: Document) -> list[dict[str, str]]:
 def get_ocr_provider() -> OCRProvider:
     provider = os.getenv("OCR_PROVIDER", "").lower()
 
+    if provider == "orcarouter" or os.getenv("ORCAROUTER_API_KEY"):
+        return OrcaRouterOCR()
+
     if provider == "openrouter" or os.getenv("OPENROUTER_API_KEY"):
         return OpenRouterOCR()
 
@@ -484,29 +693,21 @@ def get_ocr_provider() -> OCRProvider:
 
 
 def check_exceptions_and_generate_advice(document: Document) -> dict[str, Any]:
-    """
-    Documentオブジェクトから「不鮮明（信頼度低）」「必須項目不足」などの例外を検知し、
-    AI Agentによる職員向けアドバイスを生成する
-    """
     missing_fields = required_review_fields(document)
-    
+
     if not missing_fields:
-        return {
-            "has_exception": False,
-            "issues": [],
-            "agent_advice": None
-        }
+        return {"has_exception": False, "issues": [], "agent_advice": None}
 
     issues = []
     details_for_prompt = []
-    
+
     for item in missing_fields:
         issue_str = f"【{item['question']}】({item['reason']})"
         issues.append(issue_str)
         details_for_prompt.append(f"- {item['reason']}")
 
     prompt_issues = "\n".join(details_for_prompt)
-    
+
     agent_advice = (
         f"【AI Agentからの対応提案】\n"
         f"以下の項目で読み取り不可または基準以下の信頼度が検出されました。\n"
@@ -516,8 +717,4 @@ def check_exceptions_and_generate_advice(document: Document) -> dict[str, Any]:
         f"2. 画像鮮明化等で判定が困難な場合は、申請者へ提出の再依頼または確認連絡を行ってください。"
     )
 
-    return {
-        "has_exception": True,
-        "issues": issues,
-        "agent_advice": agent_advice
-    }
+    return {"has_exception": True, "issues": issues, "agent_advice": agent_advice}

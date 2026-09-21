@@ -1,0 +1,32 @@
+import {prepareCoordinatedAnnual} from './annual-coordination.mjs';
+import {classifyFinding,resultPayments,basicLedger} from './decision-output.mjs';
+import {factRecords} from './verification.mjs';
+import {evaluateNational,NATIONAL_VERSION} from './national.mjs';
+import {evaluateAnnual,ANNUAL_VERSION} from './annual.mjs';
+import {RULE_VERSION} from './rules.mjs';
+import {evaluateWithSpecialists,SPECIALIST_VERSION} from './specialist.mjs';
+import {digest} from './store.mjs';
+export const PROCESS_VERSION='staff-demo-0.8';
+export const fields=['person','date','provider','category','setting','points','cash','excluded','kind'];
+const names={person:'受診者',date:'診療日',provider:'医療機関',category:'医科・歯科区分',setting:'入院・外来区分',points:'保険点数',cash:'本人支払額',excluded:'保険外負担額'};
+export function validate(draft){
+ if(!Array.isArray(draft)||!draft.length||draft.length>100)throw Error('明細の件数を確認してください');
+ const ids=new Set();for(const r of draft){if(!r.id||ids.has(r.id))throw Error('明細が重複しています');ids.add(r.id);for(const k of ['points','cash','excluded'])if(r[k]!=null&&r[k]!==''&&(!Number.isSafeInteger(r[k])||r[k]<0||r[k]>1e8))throw Error(k+'は0以上の整数で入力してください');if(r.date&&(!/^\d{4}-\d{2}-\d{2}$/.test(r.date)||!Number.isFinite(Date.parse(r.date))||new Date(r.date).toISOString().slice(0,10)!==r.date))throw Error('診療日を確認してください');}
+}
+export function processCase(row){
+ const p=row.payload;validate(p.draft);const facts=structuredClone(p.facts),findings=[],completions=[];const verifiedInput=factRecords(p,row.revision).statements?.verified;
+ const statements=p.draft.map(input=>{const known=facts.statements.find(s=>s.id===input.id);if(!known){findings.push({kind:'INVALID_FACT',detail:'DBに対応する明細がありません',owner:'STAFF'});return input;}
+  if(input.kind&&input.kind!==(known.kind||'NORMAL'))findings.push({id:'statements',kind:'INVALID_FACT',detail:'明細種別が確認済み情報と異なります',owner:'STAFF'});const result={...known};for(const k of fields.filter(k=>k!=='kind'&&!(k==='points'&&['OVERSEAS','ORTHOSIS'].includes(known.kind)))){const v=input[k];if(v===null||v===undefined||v===''){if(known[k]!=null&&verifiedInput){result[k]=known[k];completions.push({statement:input.id,field:k,value:known[k],source:'Supabase確認済み明細'});}else{result[k]=null;findings.push({kind:'MISSING_FACT',detail:`${input.id}の${names[k]}が不足しています`,owner:'CITIZEN'});}}else{result[k]=v;if(known[k]!=null&&v!==known[k])findings.push({kind:'INVALID_FACT',detail:`${input.id}の${names[k]}が確認済みDB情報と異なります（入力 ${v} / DB ${known[k]}）`,owner:'STAFF'});}}
+  if(!['OVERSEAS','ORTHOSIS'].includes(result.kind)&&result.points!=null&&result.points*10!==result.total)findings.push({kind:'INVALID_FACT',detail:'保険点数と医療費総額の照合が必要です',owner:'STAFF'});return result;});
+ facts.statements=statements;
+ for(const s of statements){if(s.kind&&!['NORMAL','OVERSEAS','ORTHOSIS'].includes(s.kind))findings.push({id:'statements',kind:'INVALID_FACT',detail:'明細種別が不正です',owner:'STAFF'});for(const [kind,flag] of [['OVERSEAS','overseas'],['ORTHOSIS','orthosis']])if(s.kind===kind&&facts.exception_screen?.[flag]!==true)findings.push({id:'statements',kind:'INVALID_FACT',detail:'明細種別と例外確認記録が一致しません',owner:'STAFF'});}
+
+ for(const name of ((facts.settlement_units||facts.care_periods)?[]:['qualification','income'])){const record=facts[name];if(!record?.from||!record?.through||statements.some(s=>s.date&&(s.date<record.from||s.date>record.through)))findings.push({kind:'MISSING_FACT',detail:`診療日に有効な${name==='qualification'?'資格':'所得'}の確認済み情報が不足しています`,owner:'STAFF'});}
+
+ const records=factRecords({...p,facts},row.revision);
+ if(facts.annual&&!records.annual?.verified)findings.push({id:'P30',kind:'MISSING_FACT',detail:'年間台帳の確認済み証拠が不足しています',owner:'STAFF'});
+ for(const name of ['qualification','income','statements','history','exception_screen','prior_paid','claim_timing'])if(!records[name]?.verified)findings.push({id:name,kind:'MISSING_FACT',detail:name+'の確認状態・証拠が不足しています',owner:'STAFF'});
+ const evaluated=findings.length?{findings}:evaluateNational({month:p.month},records);const annualResult=evaluated.findings.length?{findings:[],proposal:null}:evaluated.components?.length?(facts.annual?prepareCoordinatedAnnual(p.month,facts):{findings:[],proposal:null}):evaluateAnnual(p.month,facts,{asOf:p.synthetic===true&&p.simulation_date?p.simulation_date:undefined});const issue=[...evaluated.findings,...annualResult.findings].map(classifyFinding);const annual=annualResult.proposal;const monthly=evaluated.proposal||null;const components=evaluated.components||[];const total=issue.length?null:(monthly?.additional||0)+(annual?.additional||0)+components.reduce((n,c)=>n+c.additional,0);
+ const conclusion=issue.length?(issue.some(f=>f.kind!=='MISSING_FACT')?'専門判断が必要':'情報不足'):total>0?'還付見込みあり':'追加還付なし';
+ return {id:digest({id:row.id,revision:row.revision,p,RULE_VERSION,PROCESS_VERSION,SPECIALIST_VERSION,ANNUAL_VERSION,NATIONAL_VERSION}),revision:row.revision,selected_tool:annual?'MONTHLY_AND_ANNUAL':evaluated.tool||'STANDARD_MONTHLY',conclusion,period:p.month,monthly,annual,components,total_additional:total,calculation_version:NATIONAL_VERSION,health_insurance_not_applicable:!!evaluated.health_insurance_not_applicable,annual_note:annual?`年間算定：${annual.from}～${annual.through}。追加還付見込み ${annual.additional.toLocaleString('ja-JP')}円。月額給付を控除済み。${annual.not_before?'41万円特例の償還払いは2027年8月以降。':''}`:'年間給付は未算定です。月額が0円でも年間の還付なしとは判定していません。',simulation_date:p.synthetic===true?p.simulation_date||null:null,findings:issue,completions,payments:resultPayments(monthly,annual,components,issue.length>0),annual_preparation:annualResult.preparation||null,calculation_ledger:basicLedger(facts,evaluated),reference_names:Object.keys(records),insurance_exclusion_reason:evaluated.insurance_exclusion_reason||null,trace:[...(evaluated.proposal?.trace||[]),...(evaluated.coordination_trace||[])],message:issue.length?'金額は未確定です。下記の資料または条件を確認してください。':components.some(c=>c.kind==='MEDICAL_ASSISTANCE')?`医療扶助等による窓口負担軽減を算定しました。本人への追加還付は${total.toLocaleString('ja-JP')}円です。医療機関への給付と返金は異なります。職員による確認前の試算です。`:`高額療養費の月額追加還付見込額は${(monthly?.additional||0).toLocaleString('ja-JP')}円です。${annual?`年間分は別途${annual.additional.toLocaleString('ja-JP')}円です。`:''}${p.simulation_date?'架空の判定日時点の試算です。':''}${components.length?`療養費・公費等の追加額は${components.reduce((n,c)=>n+c.additional,0).toLocaleString('ja-JP')}円、今回の算定合計は${total.toLocaleString('ja-JP')}円です。`:''}職員による確認前の試算です。`,created_at:new Date().toISOString(),state:issue.length?'REVIEW_REQUIRED':'COMPLETED',rule_version:RULE_VERSION};
+}

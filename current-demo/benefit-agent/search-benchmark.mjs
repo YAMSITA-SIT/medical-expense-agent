@@ -1,0 +1,25 @@
+const context={month:'2026-07',members:[{age:45}]};
+export const benchmarks=[
+ ['所得（若年）',{id:'P32'},context,['guide-5']],
+ ['所得（高齢）',{id:'P32'},{...context,members:[{age:72}]},['guide-4']],
+ ['別保険の家族',{id:'P04'},context,['guide-17','guide-6']],
+ ['明細証拠',{id:'statements'},context,['guide-9','guide-11']],
+ ['時効',{id:'claim_timing'},context,['guide-12']],
+ ['疾病特例',{id:'P24'},context,['guide-13']],
+ ['付加給付',{id:'P22'},context,['guide-13']],
+ ['共済附加給付の一般参考',{id:'P23'},context,['guide-13']],
+ ['自治体助成の一般参考',{id:'P21'},context,['guide-13']],
+ ['新年間上限',{id:'P30'},{...context,month:'2026-09'},['reform-4','overview-2']],
+ ['旧外来年間上限',{id:'P30'},context,['guide-4']],
+ ['多数回',{id:'history'},context,['guide-7']],
+ ['食費除外',{detail:'差額ベッド・食費は対象か'},context,['guide-10']],
+ ['所得・口語',{detail:'収入区分がわからない'},context,['guide-5']],
+ ['別保険・口語',{detail:'家族が別の保険です'},context,['guide-17','guide-6']],
+ ['75歳到達月の詳細規定なし',{id:'P14'},context,[]],
+ ['労災資料なし',{id:'P26'},context,[]],
+ ['海外資料なし',{id:'P27'},context,[]],
+ ['装具資料なし',{id:'P28'},context,[]],
+ ['第三者行為資料なし',{id:'P25'},context,[]],
+ ['将来表は将来月だけに提示',{id:'P32'},{...context,month:'2028-01'},['reform-5','overview-3']],
+ ['未知の論点',{detail:'未知の医療制度X'},context,[]]
+];
