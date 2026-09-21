@@ -57,6 +57,7 @@ class DuplicateDetector:
 
     def check_and_record(self, digest: str) -> bool:
         now = time.monotonic()
+        # 古いエントリの削除
         self._seen = {key: expiry for key, expiry in self._seen.items() if expiry > now}
         duplicate = digest in self._seen
         self._seen[digest] = now + self.ttl_seconds
@@ -132,9 +133,9 @@ class MockOCR:
                     }.items()
                 },
                 "raw_text": (
-                    "領収書\\n患者氏名 架空の患者A\\n架空病院A\\n"
-                    "診療日 2026年7月15日\\n総医療費 1,000,000円\\n"
-                    "保険適用額 700,000円\\n自己負担額 300,000円"
+                    "領収書\n患者氏名 架空の患者A\n架空病院A\n"
+                    "診療日 2026年7月15日\n総医療費 1,000,000円\n"
+                    "保険適用額 700,000円\n自己負担額 300,000円"
                 ),
             }
         )
@@ -178,8 +179,9 @@ class AzureDocumentIntelligenceOCR:
             valid_operation_host = (
                 operation_url and urlparse(operation_url).netloc == urlparse(self.endpoint).netloc
             )
-            if not valid_operation_host:
+            if not valid_operation_host or not operation_url:
                 raise OCRProviderError()
+
             deadline = time.monotonic() + self.timeout_seconds
             while time.monotonic() < deadline:
                 poll = await client.get(
@@ -435,7 +437,7 @@ def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
         "領収書": "receipt",
     }.get(doc_type["value"])
     digest = image_hash(image)
-    raw_text = "\\n".join(line.text for line in lines)
+    raw_text = "\n".join(line.text for line in lines)
     return Document.model_validate(
         {
             "document_id": f"ocr-{digest[:20]}",
@@ -473,25 +475,25 @@ def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
                 _field(
                     lines,
                     r"発行日|領収日",
-                    r"((?:19|20)\\d{2}[年/.\\-]\\d{1,2}[月/.\\-]\\d{1,2}日?)",
+                    r"((?:19|20)\d{2}[年/.\-]\d{1,2}[月/.\-]\d{1,2}日?)",
                 )
             ),
             "insurance_covered_amount_yen": _yen(lines, r"保険適用額|保険負担額|保険者負担"),
             "department": _field(
                 lines,
                 r"診療科|科名|内科|外科|小児科|皮膚科|眼科|耳鼻",
-                r"(?:診療科|科名)?\\s*[:：]?\\s*([^\\s:：]{1,30}科)",
+                r"(?:診療科|科名)?\s*[:：]?\s*([^\s:：]{1,30}科)",
             ),
             "insurer_number": _field(
-                lines, r"保険者番号", r"(?:保険者番号)?\\s*[:：]?\\s*([0-9０-９]{6,8})"
+                lines, r"保険者番号", r"(?:保険者番号)?\s*[:：]?\s*([0-9０-９]{6,8})"
             ),
             "insurance_symbol": _field(
-                lines, r"記号", r"(?:記号)\\s*[:：]?\\s*([A-Za-z0-9０-９ぁ-んァ-ヶ一-龠\\-]{1,30})"
+                lines, r"記号", r"(?:記号)\s*[:：]?\s*([A-Za-z0-9０-９ぁ-んァ-ヶ一-龠\-]{1,30})"
             ),
             "insurance_member_number": _field(
                 lines,
                 r"(?:被保険者)?番号",
-                r"(?:被保険者)?番号\\s*[:：]?\\s*([A-Za-z0-9０-９\\-]{1,30})",
+                r"(?:被保険者)?番号\s*[:：]?\s*([A-Za-z0-9０-９\-]{1,30})",
             ),
             "raw_text": raw_text,
         }
