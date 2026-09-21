@@ -279,7 +279,7 @@ class OpenRouterOCR:
         timeout_seconds: float = OCR_TIMEOUT_SECONDS,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        self.model = model
+        self.model = os.getenv("OPENROUTER_MODEL", model)
         self.endpoint = "https://openrouter.ai/api/v1/chat/completions"
         self.client = client
         self.timeout_seconds = timeout_seconds
@@ -482,7 +482,9 @@ def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
                 lines, r"記号", r"(?:記号)\\s*[:：]?\\s*([A-Za-z0-9０-９ぁ-んァ-ヶ一-龠\\-]{1,30})"
             ),
             "insurance_member_number": _field(
-                lines, r"(?:被保険者)?番号", r"(?:被保険者)?番号\\s*[:：]?\\s*([A-Za-z0-9０-９\\-]{1,30})"
+                lines,
+                r"(?:被保険者)?番号",
+                r"(?:被保険者)?番号\\s*[:：]?\\s*([A-Za-z0-9０-９\\-]{1,30})",
             ),
             "raw_text": raw_text,
         }
