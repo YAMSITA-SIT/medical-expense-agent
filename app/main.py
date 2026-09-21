@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.benefits.api import router as benefits_router
 from app.models import EvaluationRequest, EvaluationResponse
 from app.services.evaluator import evaluate
 from app.workflow.api import router
@@ -12,6 +13,7 @@ app = FastAPI(
     description="70歳未満の高額療養費を決定的なルールで概算するMVP",
 )
 app.include_router(router)
+app.include_router(benefits_router)
 
 
 @app.exception_handler(RequestValidationError)
