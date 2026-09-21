@@ -1,38 +1,69 @@
-{
-  "schema_version": "1.0",
-  "rules": [
-    {
-      "rule_id": "hcm-70u-2015-a", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"],
-      "age_condition": "under_70", "income_category": "A", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent",
-      "formula": {"normal": "252600 + floor(max(0, eligible_medical_cost - 842000) / 100)", "frequent": "140100"}, "rounding": "1%加算部分は円未満切捨て", "effective_from": "2015-01-01", "effective_to": "2026-07-31",
-      "source_document": "厚生労働省 高額療養費制度を利用される皆さまへ", "source_article": "70歳未満の方の自己負担限度額表", "source_url": "https://www.mhlw.go.jp/content/000333280.pdf", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2015-b", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "B", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "167400 + floor(max(0, eligible_medical_cost - 558000) / 100)", "frequent": "93000"}, "rounding": "1%加算部分は円未満切捨て", "effective_from": "2015-01-01", "effective_to": "2026-07-31", "source_document": "厚生労働省 高額療養費制度を利用される皆さまへ", "source_article": "70歳未満の方の自己負担限度額表", "source_url": "https://www.mhlw.go.jp/content/000333280.pdf", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2015-c", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "C", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "80100 + floor(max(0, eligible_medical_cost - 267000) / 100)", "frequent": "44400"}, "rounding": "1%加算部分は円未満切捨て", "effective_from": "2015-01-01", "effective_to": "2026-07-31", "source_document": "厚生労働省 高額療養費制度を利用される皆さまへ", "source_article": "70歳未満の方の自己負担限度額表", "source_url": "https://www.mhlw.go.jp/content/000333280.pdf", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2015-d", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "D", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "57600", "frequent": "44400"}, "rounding": "整数円", "effective_from": "2015-01-01", "effective_to": "2026-07-31", "source_document": "厚生労働省 高額療養費制度を利用される皆さまへ", "source_article": "70歳未満の方の自己負担限度額表", "source_url": "https://www.mhlw.go.jp/content/000333280.pdf", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2015-e", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "E", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "35400", "frequent": "24600"}, "rounding": "整数円", "effective_from": "2015-01-01", "effective_to": "2026-07-31", "source_document": "厚生労働省 高額療養費制度を利用される皆さまへ", "source_article": "70歳未満の方の自己負担限度額表", "source_url": "https://www.mhlw.go.jp/content/000333280.pdf", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2026-a", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "A", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "270300 + floor(max(0, eligible_medical_cost - 901000) / 100)", "frequent": "140100"}, "rounding": "1%加算部分は円未満切捨て", "effective_from": "2026-08-01", "effective_to": "2027-07-31", "source_document": "厚生労働省 高額療養費制度について", "source_article": "令和8年8月から令和9年7月までの自己負担限度額表", "source_url": "https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryouhoken/juuyou/kougakuiryou/index.html", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2026-b", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "B", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "179100 + floor(max(0, eligible_medical_cost - 597000) / 100)", "frequent": "93000"}, "rounding": "1%加算部分は円未満切捨て", "effective_from": "2026-08-01", "effective_to": "2027-07-31", "source_document": "厚生労働省 高額療養費制度について", "source_article": "令和8年8月から令和9年7月までの自己負担限度額表", "source_url": "https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryouhoken/juuyou/kougakuiryou/index.html", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2026-c", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "C", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "85800 + floor(max(0, eligible_medical_cost - 286000) / 100)", "frequent": "44400"}, "rounding": "1%加算部分は円未満切捨て", "effective_from": "2026-08-01", "effective_to": "2027-07-31", "source_document": "厚生労働省 高額療養費制度について", "source_article": "令和8年8月から令和9年7月までの自己負担限度額表", "source_url": "https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryouhoken/juuyou/kougakuiryou/index.html", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2026-d", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "D", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "61500", "frequent": "44400"}, "rounding": "整数円", "effective_from": "2026-08-01", "effective_to": "2027-07-31", "source_document": "厚生労働省 高額療養費制度について", "source_article": "令和8年8月から令和9年7月までの自己負担限度額表", "source_url": "https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryouhoken/juuyou/kougakuiryou/index.html", "confirmation_status": "official_guidance_verified"
-    },
-    {
-      "rule_id": "hcm-70u-2026-e", "program_name": "高額療養費", "insurance_types": ["nhi", "employee", "mutual"], "age_condition": "under_70", "income_category": "E", "care_condition": "inpatient_or_outpatient", "aggregation_condition": "individual_or_same_insurance_household", "frequency_condition": "normal_or_frequent", "formula": {"normal": "36900", "frequent": "24600"}, "rounding": "整数円", "effective_from": "2026-08-01", "effective_to": "2027-07-31", "source_document": "厚生労働省 高額療養費制度について", "source_article": "令和8年8月から令和9年7月までの自己負担限度額表", "source_url": "https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryouhoken/juuyou/kougakuiryou/index.html", "confirmation_status": "official_guidance_verified"
-    }
-  ]
-}
+from datetime import date
+import json
+import math
+from pathlib import Path
+
+
+def load_benefit_rules():
+  """benefit_rules.json からルールを読み込む"""
+  rule_path = Path(__file__).parent.parent / "rules" / "benefit_rules.json"
+  if not rule_path.exists():
+    # パスが異なる場合のフォールバック
+    rule_path = Path("app/rules/benefit_rules.json")
+
+  with open(rule_path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+  return data.get("rules", [])
+
+
+def calculate_high_cost_medical(
+    target_date: date,
+    age_under_70: bool,
+    income_category: str,
+    eligible_medical_cost: float,
+    is_frequent: bool = False,
+):
+  """指定された条件と日付に合致するルールを適用し、正確な自己負担限度額を計算する"""
+  rules = load_benefit_rules()
+
+  # 該当するルールを検索（日付と年齢、所得区分でマッチング）
+  matched_rule = None
+  for rule in rules:
+    from_date = date.fromisoformat(rule["effective_from"])
+    to_date = date.fromisoformat(rule["effective_to"])
+
+    # 期間、年齢、所得区分の条件チェック
+    if from_date <= target_date <= to_date:
+      if (
+          rule["age_condition"] == ("under_70" if age_under_70 else "over_70")
+          and rule["income_category"] == income_category
+      ):
+        matched_rule = rule
+        break
+
+  if not matched_rule:
+    raise ValueError(
+        f"該当する高額療養費のルールが見つかりません (日付: {target_date}, 区分:"
+        f" {income_category})"
+    )
+
+  formula_dict = matched_rule["formula"]
+
+  # 頻度（通常 or 多数回該当）に応じた数式の選択
+  frequency_key = "frequent" if is_frequent else "normal"
+  formula_str = formula_dict.get(frequency_key, "0")
+
+  # 数式を安全に評価するための環境を準備
+  # Pythonの数式文字列（例: "85800 + floor(max(0, eligible_medical_cost - 286000) / 100)"）を計算
+  safe_dict = {
+      "eligible_medical_cost": eligible_medical_cost,
+      "floor": math.floor,
+      "max": max,
+  }
+
+  try:
+    limit_amount = eval(formula_str, {"__builtins__": {}}, safe_dict)
+  except Exception as e:
+    raise RuntimeError(f"計算式の評価に失敗しました: {formula_str}") from e
+
+  return int(limit_amount)

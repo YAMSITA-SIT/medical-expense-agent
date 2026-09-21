@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -22,6 +23,8 @@ MAX_IMAGE_PIXELS = 20_000_000
 AZURE_API_VERSION = "2024-11-30"
 AZURE_MODEL_ID = "prebuilt-read"
 OCR_TIMEOUT_SECONDS = 30.0
+
+logger = logging.getLogger(__name__)
 
 
 class OCRProviderError(Exception):
@@ -151,7 +154,8 @@ class OrcaRouterOCR:
         timeout_seconds: float = OCR_TIMEOUT_SECONDS,
     ) -> None:
         self.api_key = api_key or os.getenv("ORCAROUTER_API_KEY")
-        base_url = os.getenv("ORCAROUTER_BASE_URL", "https://api.orcarouter.com/v1")
+        # OrcaRouter の OpenAI 互換 API。旧コードの .com ではなく .ai を使用する。
+        base_url = os.getenv("ORCAROUTER_BASE_URL", "https://api.orcarouter.ai/v1")
         self.endpoint = f"{base_url.rstrip('/')}/chat/completions"
         self.model = os.getenv("ORCAROUTER_MODEL", model)
         self.client = client
@@ -225,11 +229,33 @@ class OrcaRouterOCR:
 
         try:
             response = await client.post(self.endpoint, headers=headers, json=payload)
-            if response.status_code != 200:
-                raise OCRProviderError()
+            if response.is_error:
+                # APIキーや画像そのものは出力せず、原因調査に必要な応答だけを記録する。
+                logger.error(
+                    "OrcaRouter request failed: status=%s body=%s",
+                    response.status_code,
+                    response.text[:2000],
+                )
+                raise OCRProviderError(
+                    f"OrcaRouter returned HTTP {response.status_code}"
+                )
 
             res_data = response.json()
             content = res_data["choices"][0]["message"]["content"]
+
+            # モデルによっては JSON を Markdown のコードブロックで返すことがある。
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            if not isinstance(content, str):
+                raise TypeError("OrcaRouter response content is not text")
+            content = content.strip()
+            if content.startswith("```"):
+                content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
+                content = re.sub(r"\s*```$", "", content)
             parsed = json.loads(content)
 
             digest = image_hash(image)
@@ -278,7 +304,13 @@ class OrcaRouterOCR:
             doc_dict["raw_text"] = parsed.get("raw_text")
             return Document.model_validate(doc_dict)
 
+        except (TimeoutError, httpx.TimeoutException) as error:
+            logger.error("OrcaRouter request timed out")
+            raise OCRProviderTimeout() from error
+        except OCRProviderError:
+            raise
         except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            logger.exception("OrcaRouter response processing failed: %s", type(error).__name__)
             raise OCRProviderError() from error
         finally:
             if owned_client:
@@ -673,19 +705,38 @@ def required_review_fields(document: Document) -> list[dict[str, str]]:
 
 
 def get_ocr_provider() -> OCRProvider:
-    provider = os.getenv("OCR_PROVIDER", "").lower()
-
-    if provider == "orcarouter" or os.getenv("ORCAROUTER_API_KEY"):
-        return OrcaRouterOCR()
-
-    if provider == "openrouter" or os.getenv("OPENROUTER_API_KEY"):
-        return OpenRouterOCR()
-
-    if provider == "mock":
-        return MockOCR()
-
+    provider = os.getenv("OCR_PROVIDER", "").strip().lower()
+    use_mock = os.getenv("USE_MOCK", "").strip().lower()
     endpoint = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
     key = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY")
+
+    # OCR_PROVIDER が指定されている場合は、他のAPIキーより必ず優先する。
+    if provider:
+        if provider == "mock":
+            return MockOCR()
+        if provider == "orcarouter":
+            if not os.getenv("ORCAROUTER_API_KEY"):
+                raise OCRProviderError("ORCAROUTER_API_KEY is not configured")
+            return OrcaRouterOCR()
+        if provider == "openrouter":
+            if not os.getenv("OPENROUTER_API_KEY"):
+                raise OCRProviderError("OPENROUTER_API_KEY is not configured")
+            return OpenRouterOCR()
+        if provider == "azure":
+            if not endpoint or not key:
+                raise OCRProviderError("Azure OCR settings are not configured")
+            return AzureDocumentIntelligenceOCR(endpoint, key)
+        raise OCRProviderError(f"Unknown OCR_PROVIDER: {provider}")
+
+    # 後方互換性のため USE_MOCK も解釈する。
+    if use_mock in {"1", "true", "yes", "on"}:
+        return MockOCR()
+
+    # プロバイダー未指定時のみ、設定済みの資格情報から自動選択する。
+    if os.getenv("ORCAROUTER_API_KEY"):
+        return OrcaRouterOCR()
+    if os.getenv("OPENROUTER_API_KEY"):
+        return OpenRouterOCR()
     if endpoint and key and endpoint.startswith("https://"):
         return AzureDocumentIntelligenceOCR(endpoint, key)
 

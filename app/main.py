@@ -1,62 +1,52 @@
-import os
-
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from app.benefits.api import router as benefits_router
-from app.models import EvaluationRequest, EvaluationResponse
-from app.services.evaluator import evaluate
-from app.workflow.api import router
+from app.workflow.api import router as workflow_router
+
 
 app = FastAPI(
-    title="Medical Expense Agent API",
-    version="0.1.0",
-    description="70歳未満の高額療養費を決定的なルールで概算するMVP",
+    title="Medical Expense Support Agent API",
+    version="2.0.0",
+    description="領収書画像解析および医療費支援制度判定API",
 )
 
-frontend_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
-    ).split(",")
-    if origin.strip()
-]
+
+# 開発環境のフロントエンドからAPIを呼び出せるようにする設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=frontend_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-app.include_router(router)
-app.include_router(benefits_router)
 
 
-@app.exception_handler(RequestValidationError)
-async def safe_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
-    # Pydantic's default error response can echo names, dates or account numbers.
-    return JSONResponse(
-        status_code=422,
-        content={
-            "detail": [
-                {
-                    "loc": list(error["loc"]),
-                    "type": error["type"],
-                    "msg": "入力形式を確認してください",
-                }
-                for error in exc.errors()
-            ]
-        },
-    )
+# benefits/api.py 側に /v3/benefits が定義されているため、
+# 実際のURLは /v1/v3/benefits/... になります。
+app.include_router(benefits_router, prefix="/v1")
+
+
+# workflow/api.py 側ですでに /v2 が定義されています。
+# ここで prefix="/v2" を付けると /v2/v2/... になるため付けません。
+app.include_router(workflow_router)
+
+
+@app.get("/")
+def read_root() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "service": "medical-expense-agent",
+    }
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.post("/v1/high-cost-medical-expense/evaluate", response_model=EvaluationResponse)
-def evaluate_high_cost_medical_expense(request: EvaluationRequest) -> EvaluationResponse:
-    return evaluate(request)
+    return {
+        "status": "ok",
+    }

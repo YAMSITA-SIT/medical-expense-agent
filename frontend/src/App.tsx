@@ -9,12 +9,12 @@ type InsuranceType = 'union' | 'kyokai' | 'kokuho';
 export default function App() {
   const [currentStep, setCurrentStep] = useState<1 | 2>(1);
 
-  // 選択条件（学生・標準的な家庭を初期値に設定）
+  // ユーザー設定（学生・標準世帯向け標準値）
   const [incomeTier, setIncomeTier] = useState<IncomeTier>('standard');
   const [ageBracket, setAgeBracket] = useState<AgeBracket>('under_70');
   const [insuranceType, setInsuranceType] = useState<InsuranceType>('union');
-  const [isFrequentPayer, setIsFrequentPayer] = useState(false); // 初期値はオフ
-  const [hasFamilyCopay, setHasFamilyCopay] = useState(false); // 初期値はオフ
+  const [isFrequentPayer, setIsFrequentPayer] = useState(false);
+  const [hasFamilyCopay, setHasFamilyCopay] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
@@ -29,43 +29,45 @@ export default function App() {
     setErrorMessage(null);
 
     try {
-      setLoadingMessage('領収書を解析し、制度を探索しています...');
+      setLoadingMessage('画像から文字・金額をOCRスキャンしています...');
 
-      // ファイル名または画像判別で正確な金額を設定（眼科の通常受診860円 vs 高額サンプル12万円）
-      const isHighCostSample = file.name.includes('high_cost') || file.size > 200000;
-      let copayAmount = isHighCostSample ? 120000 : 860;
-      let totalCost = isHighCostSample ? 400000 : 2860;
-      let billingMonth = '2026年9月';
+      // 1. 画像ファイルを raw body でバックエンドOCRエンドポイントへ送信
+      const contentType = file.type || 'image/jpeg';
+      const extractRes = await fetch(`${API_BASE}/v2/documents/extract`, {
+        method: 'POST',
+        headers: { 'Content-Type': contentType },
+        body: file,
+      });
 
-      // 1. OCR APIの呼び出しを試行
-      try {
-        const contentType = file.type || 'image/png';
-        const extractRes = await fetch(`${API_BASE}/v2/documents/extract`, {
-          method: 'POST',
-          headers: { 'Content-Type': contentType },
-          body: file,
-        });
-
-        if (extractRes.ok) {
-          const ext = await extractRes.json();
-          if (ext?.copay_amount !== undefined && ext.copay_amount > 0) {
-            copayAmount = ext.copay_amount;
-            totalCost = ext.total_medical_cost || Math.round(copayAmount / 0.3);
-          }
-          if (ext?.billing_month) {
-            billingMonth = ext.billing_month;
-          }
-        }
-      } catch (ocrErr) {
-        console.warn('フォールバックを使用:', ocrErr);
+      if (!extractRes.ok) {
+        const errJson = await extractRes.json().catch(() => null);
+        throw new Error(
+          errJson?.detail
+            ? (typeof errJson.detail === 'object' ? JSON.stringify(errJson.detail) : errJson.detail)
+            : `画像の解析に失敗しました (${extractRes.status})`
+        );
       }
 
-      // 家族受診の合算分
+      // OCR解析結果の受け取り（ネスト形式・フラット形式双方に対応）
+      const resJson = await extractRes.json();
+      const ext = resJson.extracted_data || resJson;
+
+      const rawCopay = ext.copay_amount?.value ?? ext.copay_amount;
+      const rawTotal = ext.total_cost?.value ?? ext.total_medical_cost?.value ?? ext.total_medical_cost ?? ext.total_cost;
+      const rawMonth = ext.billing_month?.value ?? ext.billing_month;
+
+      const copayAmount: number = typeof rawCopay === 'number' ? rawCopay : 0;
+      const totalCost: number = typeof rawTotal === 'number' ? rawTotal : (copayAmount > 0 ? Math.round(copayAmount / 0.3) : 0);
+      const billingMonth: string = rawMonth ? String(rawMonth) : '2026年9月';
+
+      // 2. 読み取った金額から制度判定を実行
+      setLoadingMessage('読み取った金額から使える支援制度を計算しています...');
+
       const familyAmount = hasFamilyCopay ? 30000 : 0;
       const effectiveCopay = copayAmount + familyAmount;
       const effectiveTotalCost = totalCost + Math.round(familyAmount / 0.3);
 
-      // 2. 年収ごとの上限額判定
+      // 年収ごとの月額自己負担限度額（70歳未満基準）
       let limitAmount = 80100 + Math.round((effectiveTotalCost - 267000) * 0.01);
       let frequentLimit = 44400;
 
@@ -90,19 +92,19 @@ export default function App() {
 
       const items: any[] = [];
 
-      // ① 高額療養費（上限超過時のみ）
+      // ① 高額療養費（支払額が上限額を超えている場合のみ）
       if (refund > 0) {
         items.push({
-          title: isFrequentPayer ? '毎月の医療費払い戻し（リピート割引）' : '毎月の医療費払い戻し（高額療養費）',
+          title: isFrequentPayer ? '毎月の医療費払い戻し（多数回該当）' : '毎月の医療費払い戻し（高額療養費）',
           amount: refund,
           badge: '申請すれば必ずもらえる',
           badgeColor: '#0f766e',
           reason: isFrequentPayer
-            ? `ここ1年で高額な支払いがあったため、上限が月44,400円まで下がります。払いすぎた分（約${refund.toLocaleString()}円）が手元に戻ります。`
-            : `1か月に払う医療費の上限（あなたの場合は約${appliedLimit.toLocaleString()}円）を超えているため、差額が手元に戻ります。`,
-          where: insuranceType === 'kokuho' ? 'お住まいの市役所・区役所の窓口' : '会社の総務窓口、または健康保険組合の窓口',
-          when: '受診した月の翌月から2年以内',
-          needs: '医療機関でもらった領収書原本、保険証、振込口座の通帳',
+            ? `ここ1年で高額な支払いがあったため、上限が月44,400円まで下がります。払いすぎた分（${refund.toLocaleString()}円）が手元に戻ります。`
+            : `1か月に払う医療費の上限（あなたの場合は${appliedLimit.toLocaleString()}円）を超えているため、差額が手元に戻ります。`,
+          where: insuranceType === 'kokuho' ? 'お住まいの市役所・区役所窓口' : '会社の総務、または健保組合窓口',
+          when: '受診月の翌月から2年以内',
+          needs: '医療機関の領収書原本、保険証、振込口座の通帳',
         });
       }
 
@@ -113,16 +115,17 @@ export default function App() {
           amount: Math.min(familyAmount, refund),
           badge: '家族分もプラス',
           badgeColor: '#0369a1',
-          reason: '同じ保険証に入っている家族の医療費（2万1千円以上）を合算して、負担軽減を受けられます。',
+          reason: '同じ保険証に入っている家族の医療費（2万1千円以上）を合算して、世帯全体で負担軽減を受けられます。',
           where: 'お使いの保険証の申請窓口',
           when: '受診した翌月から2年以内',
           needs: '家族全員分の領収書原本、家族の保険証',
         });
       }
 
-      // ③ 会社の独自給付（付加給付：自己負担が2.5万円を超えている場合のみ）
+      // ③ 会社の付加給付（自己負担が約2.5万円を超えている場合のみ）
       if (insuranceType === 'union' && effectiveCopay > 25000) {
-        const unionBenefit = Math.max(0, Math.min(appliedLimit, effectiveCopay) - 25000);
+        const outOfPocket = Math.min(appliedLimit, effectiveCopay);
+        const unionBenefit = Math.max(0, outOfPocket - 25000);
         if (unionBenefit > 0) {
           items.push({
             title: '会社の保険組合からの独自サポート（付加給付）',
@@ -130,8 +133,8 @@ export default function App() {
             badge: '大企業・公務員限定',
             badgeColor: '#7c3aed',
             reason: 'お勤め先の健康保険独自のルールで、最終的な自己負担が「約2万5千円」程度で済むようにお金が上乗せで振り込まれます。',
-            where: '勤務先の健康保険組合',
-            when: '通常、診療から2〜3か月後',
+            where: '勤務先の健康保険組合（自動振込の場合あり）',
+            when: '診療から2〜3か月後',
             needs: '申請不要の場合が多いですが、念のため会社の担当窓口にご確認ください',
           });
         }
@@ -139,24 +142,28 @@ export default function App() {
 
       // ④ 確定申告の医療費控除（年間10万円超えが見込まれる場合のみ）
       if (effectiveCopay >= 100000) {
-        const deductionEst = Math.round(Math.max(0, effectiveCopay - refund - 100000) * 0.2);
-        items.push({
-          title: '来年の税金が安くなる医療費控除（確定申告）',
-          amount: deductionEst > 0 ? deductionEst : 5000,
-          badge: '税金のキャッシュバック',
-          badgeColor: '#b45309',
-          reason: '年間10万円を超えているため、来年2月に確定申告をすると所得税が返金され住民税も安くなります。',
-          where: 'お近くの税務署（e-Tax対応）',
-          when: '来年の2月16日〜3月15日',
-          needs: '病院の領収書、会社でもらう源泉徴収票',
-        });
+        const netPaid = effectiveCopay - refund;
+        const deductionEst = Math.round(Math.max(0, netPaid - 100000) * 0.2);
+        if (deductionEst > 0) {
+          items.push({
+            title: '来年の税金が安くなる医療費控除（確定申告）',
+            amount: deductionEst,
+            badge: '税金のキャッシュバック',
+            badgeColor: '#b45309',
+            reason: '年間の支払いが10万円を超えているため、確定申告で所得税の還付と住民税の減額が受けられます。',
+            where: 'お近くの税務署（e-Tax対応）',
+            when: '翌年の2月16日〜3月15日',
+            needs: '病院の領収書、源泉徴収票',
+          });
+        }
       }
 
       const totalRefund = items.reduce((acc, cur) => acc + cur.amount, 0);
 
       setCalcResult({
         billingMonth,
-        copayAmount: effectiveCopay,
+        readCopay: copayAmount,
+        effectiveCopay,
         appliedLimit,
         totalRefund,
         items,
@@ -185,7 +192,7 @@ export default function App() {
           <span>🏥</span> 医療費サポートナビ
         </h1>
         <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>
-          病院の領収書を写真で選ぶだけ！見逃している「戻ってくるお金」をAIが自動計算します
+          画像から金額をスキャンし、受け取れる支援制度を自動判定します
         </p>
       </header>
 
@@ -210,14 +217,14 @@ export default function App() {
 
       {errorMessage && (
         <div style={{ backgroundColor: '#fef2f2', border: '1px solid #f87171', color: '#991b1b', padding: '14px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px' }}>
-          <strong>⚠️ お知らせ:</strong> {errorMessage}
+          <strong>⚠️ エラー:</strong> {errorMessage}
         </div>
       )}
 
       {loading && (
         <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '36px', textAlign: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', marginBottom: '20px' }}>
           <p style={{ fontSize: '17px', fontWeight: 'bold', color: '#0f766e', margin: '0 0 6px' }}>{loadingMessage}</p>
-          <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>使える支援制度や減税の特例を順番に探しています...</p>
+          <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>画像内の文字・金額を直接読み取っています...</p>
         </div>
       )}
 
@@ -225,8 +232,8 @@ export default function App() {
       {!loading && currentStep === 1 && (
         <div>
           <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', marginBottom: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-            <h3 style={{ margin: '0 0 14px', fontSize: '15px', color: '#0f766e', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>✍️</span> あなたの状況を教えてください（タップするだけでOK）
+            <h3 style={{ margin: '0 0 14px', fontSize: '15px', color: '#0f766e' }}>
+              ✍️ あなたの状況（学生の方は標準のままでOKです）
             </h3>
 
             {/* ① 年収 */}
@@ -237,7 +244,7 @@ export default function App() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '8px' }}>
                 {[
                   { id: 'low', label: '非課税・低所得', note: '自己負担の上限: 約3.5万円' },
-                  { id: 'standard', label: 'ふつう（約370万〜770万円）', note: '自己負担の上限: 約8.1万円【学生おすすめ】' },
+                  { id: 'standard', label: 'ふつう（約370万〜770万円）', note: '自己負担の上限: 約8.1万円【おすすめ】' },
                   { id: 'high', label: '多め（約770万〜1160万円）', note: '自己負担の上限: 約16.7万円' },
                   { id: 'highest', label: '高所得（1160万円超）', note: '自己負担の上限: 約25.2万円' },
                 ].map((item) => (
@@ -264,7 +271,7 @@ export default function App() {
             </div>
 
             {/* ② 年代 & 保険証 */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: '#334155', marginBottom: '6px' }}>
                   ② 受診した人の年代
@@ -329,32 +336,6 @@ export default function App() {
                 </div>
               </div>
             </div>
-
-            {/* ③ 当てはまることチェック */}
-            <div style={{ borderTop: '1px dashed #e2e8f0', paddingTop: '12px' }}>
-              <label style={{ display: 'block', fontSize: '13px', fontWeight: 'bold', color: '#334155', marginBottom: '8px' }}>
-                ④ 当てはまるものがあればチェック（支援額が増えます）
-              </label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer', backgroundColor: isFrequentPayer ? '#f0fdfa' : 'transparent', padding: '6px 8px', borderRadius: '6px' }}>
-                  <input
-                    type="checkbox"
-                    checked={isFrequentPayer}
-                    onChange={(e) => setIsFrequentPayer(e.target.checked)}
-                  />
-                  <span>直近1年間で、病院への高額な支払いが「3回以上」あった（<strong>自己負担の上限がさらに安くなります</strong>）</span>
-                </label>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer', backgroundColor: hasFamilyCopay ? '#f0fdfa' : 'transparent', padding: '6px 8px', borderRadius: '6px' }}>
-                  <input
-                    type="checkbox"
-                    checked={hasFamilyCopay}
-                    onChange={(e) => setHasFamilyCopay(e.target.checked)}
-                  />
-                  <span>同じ月に、家族も病院で2万円以上の支払いがあった（<strong>家族分もまとめて返金対象になります</strong>）</span>
-                </label>
-              </div>
-            </div>
           </div>
 
           {/* アップロードエリア */}
@@ -363,14 +344,14 @@ export default function App() {
               type="file"
               id="file-upload-input"
               style={{ display: 'none' }}
-              accept="image/png,image/jpeg,image/jpg"
+              accept="image/*"
               onChange={handleFileChange}
             />
             <label htmlFor="file-upload-input" style={{ cursor: 'pointer', display: 'block' }}>
-              <div style={{ fontSize: '44px', marginBottom: '8px' }}>📄</div>
+              <div style={{ fontSize: '44px', marginBottom: '8px' }}>📸</div>
               <h2 style={{ fontSize: '18px', margin: '0 0 6px', color: '#1e293b' }}>病院の領収書・明細書の写真を選ぶ</h2>
               <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 18px' }}>
-                写真を選ぶと、面倒な入力なしですぐに計算結果を表示します
+                AIが画像から金額をスキャンして即座に判定します
               </p>
               <span style={{ backgroundColor: '#0f766e', color: '#ffffff', padding: '12px 32px', borderRadius: '8px', fontWeight: 'bold', fontSize: '15px', display: 'inline-block' }}>
                 写真を選んで診断する
@@ -383,30 +364,33 @@ export default function App() {
       {/* STEP 2: 結果画面 */}
       {!loading && currentStep === 2 && calcResult && (
         <div>
-          {/* 金額表示 */}
-          <div style={{ backgroundColor: calcResult.totalRefund > 0 ? '#ecfdf5' : '#f8fafc', border: calcResult.totalRefund > 0 ? '2px solid #a7f3d0' : '2px solid #cbd5e1', borderRadius: '16px', padding: '24px 16px', textAlign: 'center', marginBottom: '24px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.04)' }}>
+          {/* 金額ハイライト */}
+          <div style={{ backgroundColor: calcResult.totalRefund > 0 ? '#ecfdf5' : '#f8fafc', border: calcResult.totalRefund > 0 ? '2px solid #a7f3d0' : '2px solid #cbd5e1', borderRadius: '16px', padding: '24px 16px', textAlign: 'center', marginBottom: '24px' }}>
+            <div style={{ fontSize: '13px', color: '#64748b', marginBottom: '4px' }}>
+              画像から読み取った窓口支払額: <strong>{calcResult.readCopay.toLocaleString()} 円</strong>
+            </div>
             <div style={{ fontSize: '14px', color: calcResult.totalRefund > 0 ? '#047857' : '#475569', fontWeight: 'bold' }}>
               手元に戻る可能性があるお金
             </div>
             <div style={{ fontSize: '42px', fontWeight: '900', color: calcResult.totalRefund > 0 ? '#065f46' : '#334155', margin: '6px 0' }}>
-              約 {calcResult.totalRefund.toLocaleString()} 円
+               {calcResult.totalRefund.toLocaleString()} 円
             </div>
             <div style={{ fontSize: '13px', color: '#64748b' }}>
               {calcResult.totalRefund > 0
                 ? '※ 申請すれば受け取れる支援制度が見つかりました！'
-                : '今回の受診（860円）は月の上限（約8.1万円）以内のため、この領収書単体では戻るお金はありません。'}
+                : `今回の支払額 (${calcResult.readCopay.toLocaleString()}円) は月の上限 (${calcResult.appliedLimit.toLocaleString()}円) 以内のため、この領収書単体で戻るお金はありません。`}
             </div>
           </div>
 
-          {/* 制度一覧 */}
+          {/* 制度リスト */}
           {calcResult.items.length > 0 ? (
             <div>
-              <h3 style={{ fontSize: '17px', margin: '0 0 14px', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span>🎁</span> あなたが使える制度一覧（{calcResult.items.length}件）
+              <h3 style={{ fontSize: '17px', margin: '0 0 14px', color: '#0f172a' }}>
+                🎁 あなたが使える制度一覧（{calcResult.items.length}件）
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '24px' }}>
                 {calcResult.items.map((it: any, idx: number) => (
-                  <div key={idx} style={{ border: '1px solid #e2e8f0', borderRadius: '12px', padding: '18px', backgroundColor: '#ffffff', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
+                  <div key={idx} style={{ border: '1px solid #e2e8f0', borderRadius: '12px', padding: '18px', backgroundColor: '#ffffff' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #f1f5f9', paddingBottom: '10px', marginBottom: '12px' }}>
                       <div>
                         <span style={{ backgroundColor: it.badgeColor, color: '#ffffff', fontSize: '11px', padding: '3px 8px', borderRadius: '4px', fontWeight: 'bold', display: 'inline-block', marginBottom: '4px' }}>
@@ -416,7 +400,7 @@ export default function App() {
                       </div>
                       <div style={{ textAlign: 'right' }}>
                         <div style={{ fontSize: '11px', color: '#64748b' }}>もらえる金額目安</div>
-                        <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#0f766e' }}>約 {it.amount.toLocaleString()} 円</div>
+                        <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#0f766e' }}>{it.amount.toLocaleString()} 円</div>
                       </div>
                     </div>
                     <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', color: '#334155', lineHeight: 1.6, marginBottom: '12px' }}>
@@ -432,17 +416,14 @@ export default function App() {
               </div>
             </div>
           ) : (
-            /* 戻るお金が0円だった場合の豆知識カード */
             <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', backgroundColor: '#ffffff', marginBottom: '24px' }}>
-              <h4 style={{ margin: '0 0 10px', fontSize: '15px', color: '#0f766e' }}>💡 今後のためのアドバイス</h4>
-              <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: '#475569', lineHeight: 1.8 }}>
-                <li><strong>領収書は捨てずに保管してください</strong>：同じ月（9月）に他の病院にかかったり、家族が高額な医療費を払った場合は「合算」して返金を受けられる可能性があります。</li>
-                <li><strong>1年間の合計が10万円を超えたら</strong>：ご家族の1年間（1月〜12月）の合計医療費が10万円を超えると、親御さんが確定申告で税金のキャッシュバックを受けられます。</li>
-              </ul>
+              <h4 style={{ margin: '0 0 10px', fontSize: '15px', color: '#0f766e' }}>💡 領収書のアドバイス</h4>
+              <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.7, margin: 0 }}>
+                今回は上限額以内のため0円ですが、同じ月に家族が別の病院で受診していたり、1年間の合計が10万円を超える場合は親御さんの確定申告で税金が還付されます。領収書は捨てずに保管しておきましょう。
+              </p>
             </div>
           )}
 
-          {/* 戻るボタン */}
           <div style={{ textAlign: 'center' }}>
             <button
               onClick={handleReset}
