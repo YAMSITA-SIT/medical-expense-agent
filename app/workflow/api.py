@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.rules.metadata import WORKFLOW_RULES
 from app.workflow.codes import EXCEPTION_RULES, Status
+from app.workflow.handoff import to_handoff_json
 from app.workflow.models import CaseRequest, CaseResponse
 from app.workflow.ocr import (
     MAX_IMAGE_BYTES,
@@ -11,6 +12,7 @@ from app.workflow.ocr import (
     duplicate_detector,
     get_ocr_provider,
     image_hash,
+    image_quality_issues,
     required_review_fields,
     validate_image,
 )
@@ -40,6 +42,7 @@ async def extract_document(
         raise HTTPException(422, "画像形式または画素数が無効です") from None
     digest = image_hash(bytes(data))
     duplicate = duplicate_detector.check_and_record(digest)
+    quality_issues = image_quality_issues(bytes(data))
     try:
         document = await provider.extract(bytes(data), media_type)
     except Exception:
@@ -49,9 +52,15 @@ async def extract_document(
         data.clear()
     result = document.model_dump(mode="json")
     missing = required_review_fields(document) if document.source == "ocr" else []
+    handoff = to_handoff_json(
+        document,
+        raw_text=document.raw_text if not mask else None,
+        image_quality_issues=quality_issues,
+    )
     return {
         "status": Status.REVIEW,
         "document": mask_sensitive(result) if mask else result,
+        "handoff": mask_sensitive(handoff) if mask else handoff,
         "missing_information": missing,
         "calculation_result": None,
         "duplicate_submission_suspected": duplicate,

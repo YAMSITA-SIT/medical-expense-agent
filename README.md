@@ -431,3 +431,63 @@ curl -X POST http://127.0.0.1:8000/v2/cases/evaluate \
 - 厚生労働省「標準仕様書・標準化基準（国民健康保険）」: https://www.mhlw.go.jp/stf/kokuho_std.html
 
 最終的な支給可否・金額は保険者が決定します。
+
+
+## OCR AIエージェントから制度判定エージェントへの受け渡し
+
+`POST /v2/documents/extract` のレスポンスに `handoff` を追加しています。既存の
+`document`、不足確認、制度判定APIは削除していません。制度判定エージェントには元画像ではなく、
+原則としてこの `handoff` オブジェクトだけを渡してください。この処理では給付額計算や
+制度の対象判定を行いません。
+
+既定の `mask=true` では氏名、保険識別子、OCR原文をマスクします。権限管理された内部連携で
+原文を含める必要がある場合だけ `?mask=false` を指定してください。画像とOCR原文をログへ
+出力せず、画像は処理後に破棄してください。
+
+```json
+{
+  "schema_version": "1.0",
+  "document_id": "ocr-...",
+  "document_type": "medical_receipt",
+  "patient": {"name": "架空太郎"},
+  "medical_institution": {"name": "架空病院"},
+  "treatment": {
+    "date": "2026-09-10",
+    "type": "outpatient",
+    "department": "内科"
+  },
+  "issue_date": "2026-09-10",
+  "amounts": {
+    "total_medical_cost": 300000,
+    "insurance_covered_amount": 210000,
+    "patient_payment": 90000,
+    "non_covered_amount": 0,
+    "currency": "JPY"
+  },
+  "receipt_number": "FICT-001",
+  "insurance": {
+    "insurer_number": "00000000",
+    "symbol": "架空",
+    "number": "0001"
+  },
+  "confidence": {
+    "patient.name": 0.99,
+    "treatment.date": 0.98,
+    "amounts.patient_payment": 0.99
+  },
+  "missing_fields": [],
+  "low_confidence_fields": [],
+  "validation_warnings": [],
+  "needs_human_review": false,
+  "raw_text": "OCRで読み取った原文"
+}
+```
+
+`missing_fields` は読めなかった項目、`low_confidence_fields` は信頼度0.90未満の項目、
+`validation_warnings` は低コントラスト・不鮮明・回転候補・金額不整合を表します。
+いずれかが存在すると `needs_human_review=true` です。次工程はこの場合に自動判定せず、
+人による確認・修正を要求してください。
+
+OCRプロバイダーは `.env` の `OCR_PROVIDER` で `mock`、`azure`、
+`openrouter` を選択できます。未設定か認証情報不足の場合は、実画像を読まない固定の架空
+MockOCRへフォールバックします。実在患者の画像を自動テストへ含めないでください。

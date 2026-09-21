@@ -1,18 +1,18 @@
 import asyncio
+import base64
 import hashlib
+import json
 import os
 import re
 import time
-import base64
-import json
-import httpx
 from dataclasses import dataclass
 from datetime import date
 from io import BytesIO
-from typing import Any, Protocol, Dict, List
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
-from PIL import Image, UnidentifiedImageError
+import httpx
+from PIL import Image, ImageFilter, ImageStat, UnidentifiedImageError
 
 from app.workflow.codes import OCR_MIN_CONFIDENCE
 from app.workflow.models import Document
@@ -66,6 +66,21 @@ class DuplicateDetector:
 duplicate_detector = DuplicateDetector()
 
 
+def image_quality_issues(data: bytes) -> list[str]:
+    """Conservative preflight hints; OCR confidence remains the final readability signal."""
+    issues: list[str] = []
+    with Image.open(BytesIO(data)) as image:
+        grayscale = image.convert("L")
+        if ImageStat.Stat(grayscale).stddev[0] < 12:
+            issues.append("画像のコントラストが低いため、原本との目視確認が必要です")
+        edges = grayscale.filter(ImageFilter.FIND_EDGES)
+        if ImageStat.Stat(edges).mean[0] < 2:
+            issues.append("画像が不鮮明な可能性があります")
+        if image.getexif().get(274) not in {None, 1}:
+            issues.append("画像の向き補正情報があるため、傾き・回転を確認してください")
+    return issues
+
+
 def validate_image(data: bytes, media_type: str) -> None:
     try:
         with Image.open(BytesIO(data)) as image:
@@ -108,8 +123,19 @@ class MockOCR:
                         "meal_cost_yen": 0,
                         "receipt_number": "FICTIONAL-001",
                         "document_type": "receipt",
+                        "issue_date": "2026-07-15",
+                        "insurance_covered_amount_yen": 700000,
+                        "department": "内科",
+                        "insurer_number": "00000000",
+                        "insurance_symbol": "架空",
+                        "insurance_member_number": "0001",
                     }.items()
                 },
+                "raw_text": (
+                    "領収書\\n患者氏名 架空の患者A\\n架空病院A\\n"
+                    "診療日 2026年7月15日\\n総医療費 1,000,000円\\n"
+                    "保険適用額 700,000円\\n自己負担額 300,000円"
+                ),
             }
         )
 
@@ -253,7 +279,7 @@ class OpenRouterOCR:
         timeout_seconds: float = OCR_TIMEOUT_SECONDS,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        self.model = model
+        self.model = os.getenv("OPENROUTER_MODEL", model)
         self.endpoint = "https://openrouter.ai/api/v1/chat/completions"
         self.client = client
         self.timeout_seconds = timeout_seconds
@@ -345,10 +371,19 @@ class OpenRouterOCR:
             }
 
             fields = [
-                "name", "birth_date", "service_date", "provider_name",
-                "total_medical_cost_yen", "patient_paid_yen", "care_setting",
-                "discipline", "uninsured_cost_yen", "private_room_cost_yen",
-                "meal_cost_yen", "receipt_number", "document_type"
+                "name",
+                "birth_date",
+                "service_date",
+                "provider_name",
+                "total_medical_cost_yen",
+                "patient_paid_yen",
+                "care_setting",
+                "discipline",
+                "uninsured_cost_yen",
+                "private_room_cost_yen",
+                "meal_cost_yen",
+                "receipt_number",
+                "document_type",
             ]
 
             for field in fields:
@@ -369,10 +404,11 @@ class OpenRouterOCR:
                 "confirmed": False,
             }
 
+            doc_dict["raw_text"] = parsed.get("raw_text")
             return Document.model_validate(doc_dict)
 
-        except Exception as e:
-            raise OCRProviderError(f"Failed to parse OCR response: {e}") from e
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise OCRProviderError() from error
         finally:
             if owned_client:
                 await client.aclose()
@@ -399,6 +435,7 @@ def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
         "領収書": "receipt",
     }.get(doc_type["value"])
     digest = image_hash(image)
+    raw_text = "\\n".join(line.text for line in lines)
     return Document.model_validate(
         {
             "document_id": f"ocr-{digest[:20]}",
@@ -432,6 +469,31 @@ def document_from_azure(result: dict[str, Any], image: bytes) -> Document:
                 r"(?:領収書?番号)?\s*[:：]?\s*([A-Za-z0-9\-]{3,40})",
             ),
             "document_type": doc_type,
+            "issue_date": _date_value(
+                _field(
+                    lines,
+                    r"発行日|領収日",
+                    r"((?:19|20)\\d{2}[年/.\\-]\\d{1,2}[月/.\\-]\\d{1,2}日?)",
+                )
+            ),
+            "insurance_covered_amount_yen": _yen(lines, r"保険適用額|保険負担額|保険者負担"),
+            "department": _field(
+                lines,
+                r"診療科|科名|内科|外科|小児科|皮膚科|眼科|耳鼻",
+                r"(?:診療科|科名)?\\s*[:：]?\\s*([^\\s:：]{1,30}科)",
+            ),
+            "insurer_number": _field(
+                lines, r"保険者番号", r"(?:保険者番号)?\\s*[:：]?\\s*([0-9０-９]{6,8})"
+            ),
+            "insurance_symbol": _field(
+                lines, r"記号", r"(?:記号)\\s*[:：]?\\s*([A-Za-z0-9０-９ぁ-んァ-ヶ一-龠\\-]{1,30})"
+            ),
+            "insurance_member_number": _field(
+                lines,
+                r"(?:被保険者)?番号",
+                r"(?:被保険者)?番号\\s*[:：]?\\s*([A-Za-z0-9０-９\\-]{1,30})",
+            ),
+            "raw_text": raw_text,
         }
     )
 
@@ -489,24 +551,20 @@ def check_exceptions_and_generate_advice(document: Document) -> dict[str, Any]:
     AI Agentによる職員向けアドバイスを生成する
     """
     missing_fields = required_review_fields(document)
-    
+
     if not missing_fields:
-        return {
-            "has_exception": False,
-            "issues": [],
-            "agent_advice": None
-        }
+        return {"has_exception": False, "issues": [], "agent_advice": None}
 
     issues = []
     details_for_prompt = []
-    
+
     for item in missing_fields:
         issue_str = f"【{item['question']}】({item['reason']})"
         issues.append(issue_str)
         details_for_prompt.append(f"- {item['reason']}")
 
     prompt_issues = "\n".join(details_for_prompt)
-    
+
     agent_advice = (
         f"【AI Agentからの対応提案】\n"
         f"以下の項目で読み取り不可または基準以下の信頼度が検出されました。\n"
@@ -516,8 +574,4 @@ def check_exceptions_and_generate_advice(document: Document) -> dict[str, Any]:
         f"2. 画像鮮明化等で判定が困難な場合は、申請者へ提出の再依頼または確認連絡を行ってください。"
     )
 
-    return {
-        "has_exception": True,
-        "issues": issues,
-        "agent_advice": agent_advice
-    }
+    return {"has_exception": True, "issues": issues, "agent_advice": agent_advice}
