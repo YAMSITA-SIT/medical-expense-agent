@@ -43,6 +43,13 @@ class Document(Model):
     )
     insurance_number: Extracted[Text] = Field(default_factory=Extracted)
     account_number: Extracted[Text] = Field(default_factory=Extracted)
+    issue_date: Extracted[date] = Field(default_factory=Extracted)
+    insurance_covered_amount_yen: Extracted[Yen] = Field(default_factory=Extracted)
+    department: Extracted[Text] = Field(default_factory=Extracted)
+    insurer_number: Extracted[Text] = Field(default_factory=Extracted)
+    insurance_symbol: Extracted[Text] = Field(default_factory=Extracted)
+    insurance_member_number: Extracted[Text] = Field(default_factory=Extracted)
+    raw_text: str | None = None
     content_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
