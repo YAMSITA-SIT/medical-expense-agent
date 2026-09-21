@@ -431,3 +431,80 @@ curl -X POST http://127.0.0.1:8000/v2/cases/evaluate \
 - 厚生労働省「標準仕様書・標準化基準（国民健康保険）」: https://www.mhlw.go.jp/stf/kokuho_std.html
 
 最終的な支給可否・金額は保険者が決定します。
+
+## OCR―制度判定接続API（v3）
+
+`POST /v3/benefits/evaluate-ocr` は、確認済みOCR JSONと追加情報を受け取り、期間付きの
+決定的ルールで高額療養費を計算します。生成AIに金額計算を任せません。
+
+```text
+領収書画像 -> /v2/documents/extract -> 人によるOCR値確認
+  -> 所得・保険資格・世帯・履歴・例外情報を追加
+  -> /v3/benefits/evaluate-ocr
+  -> calculated / additional_information_required / human_review_required / unsupported
+```
+
+主な入力は `patient`、`service_date` または `service_month`、`insurance`、`income`、
+`costs`、`care`、`household_expenses`、`prior_12_month_benefit_months`、
+`special_cases`、`ocr_confidence` です。OCRだけでは通常、所得区分、世帯員の対象医療費、
+過去12か月の該当履歴、公費・労災・付加給付等の認定情報が不足します。
+
+不足時は金額を返しません。
+
+```json
+{
+  "status": "additional_information_required",
+  "applicable_programs": [],
+  "missing_fields": ["insurance.type", "income.category"],
+  "calculation": null,
+  "applied_rules": [],
+  "warnings": ["不足値やOCR低信頼度値を推測せず計算を停止しました。"],
+  "needs_human_review": true
+}
+```
+
+計算成功時は対象医療費、患者負担、自己負担限度額、給付概算額に加え、`rule_id`、
+適用開始日・終了日、式、資料名、該当箇所、公式URL、確認状態を `applied_rules` へ返します。
+
+### ルールと適用年月の管理
+
+- 実行可能な期間別ルール: `app/rules/benefit_rules.json`
+- 32パターンの対応状態: `app/rules/pattern_support.json`
+- 規則選択: `app/benefits/rule_store.py`
+- OCR接続・不足検出・計算: `app/benefits/service.py`
+
+規則には `rule_id`、制度名、保険種別、年齢・所得・入外・世帯・多数回条件、式、端数、
+適用開始日・終了日、根拠資料・該当箇所・URL、確認状態を保持します。診療日に一致する
+実行可能ルールが0件または複数件なら計算を止めます。
+
+制度改正時は、旧規則を上書きせず終了日を設定し、新しい `rule_id` の規則を追加します。
+法令本文、施行日、附則、経過措置、公式案内を確認し、境界日の前後テストを追加してください。
+2013年資料は歴史資料としてのみ扱い、現在の金額表には使用していません。
+
+### 自動計算せず人へ回す条件
+
+- P22 健康保険組合の付加給付、P23 共済組合の附加給付
+- 公費負担・精神通院医療・特定疾病・労災・第三者行為
+- P27 海外療養費、P28 治療用装具、P30 年間上限
+- 月途中の保険変更、75歳到達月、70歳以上
+- 金額内訳の不一致、OCR信頼度0.90未満、期間ルール0件または重複
+
+これらは `human_review_required` または `unsupported` とし、推測金額を返しません。
+`GET /v3/benefits/pattern-support` でP01～P32の現在の分類を確認できます。
+
+### テスト
+
+```bash
+python -m pytest -q
+python -m ruff check app/benefits tests/test_benefit_integration.py
+```
+
+テストでは通常計算、入力不足、金額不整合、2026年7月／8月の境界、所得・年齢の扱い、
+世帯合算、多数回該当、保険外費用、OCR低信頼度、32パターン登録を確認します。
+
+### 個人情報と環境変数
+
+氏名は制度計算に不要なためv3入力で受け付けません。保険者番号等をログへ出さず、実患者情報を
+サンプルやテストへ保存しないでください。Azure設定は `.env.example` の変数名だけを参照し、
+秘密値を含む `.env` は `.gitignore` によりコミット対象外です。本番では認証、権限分離、暗号化、
+監査、保存期間、削除、同意、委託先管理を追加してください。
