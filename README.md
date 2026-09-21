@@ -567,3 +567,53 @@ python -m ruff check app/benefits tests/test_benefit_integration.py
 OCRプロバイダーは `.env` の `OCR_PROVIDER` で `mock`、`azure`、
 `openrouter` を選択できます。未設定か認証情報不足の場合は、実画像を読まない固定の架空
 MockOCRへフォールバックします。実在患者の画像を自動テストへ含めないでください。
+
+
+## ブラウザ画面（React + TypeScript）
+
+利用者向け画面は `frontend/` にあります。APIキーはブラウザへ設定せず、Azure/OpenRouterの秘密値はバックエンドの `.env` だけに保存してください。
+
+### Windows PowerShellで同時に起動
+
+PowerShell 1（バックエンド）:
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+uvicorn app.main:app --reload --env-file .env --port 8001
+```
+
+PowerShell 2（フロントエンド）:
+
+```powershell
+cd frontend
+Copy-Item .env.example .env
+npm install
+npm run dev
+```
+
+ブラウザで `http://localhost:5173` を開きます。APIを8001番以外で起動する場合は、`frontend/.env` の `VITE_API_BASE_URL` を変更して再起動してください。許可する開発画面のURLは、ルート `.env` の `FRONTEND_ORIGINS`（カンマ区切り）で限定できます。
+
+### 操作手順とMockOCR
+
+1. PNG/JPEG（最大5MiB）を選び、OCRを開始します。
+2. 抽出値・信頼度・位置情報を確認し、誤りを修正して確認済みにします。
+3. 保険種別、所得区分、過去12か月の該当回数、例外情報を入力します。
+4. 検証・判定を実行し、不足・例外・概算結果を確認します。
+5. 必要に応じて折りたたみ領域からhandoff等のJSONをコピーまたはダウンロードします。
+
+未設定時のOCRはMockOCRです。MockOCRは画像を解析せず固定の架空データを返し、画面にも警告が表示されます。実OCRはバックエンドの `OCR_PROVIDER` と認証情報を使います。実在患者データは許可・認証・通信暗号化等を整えた環境以外で送信しないでください。画像とOCR結果はブラウザのlocalStorageに保存しません。
+
+### フロントエンドを含むテスト
+
+```powershell
+cd frontend
+npm run typecheck
+npm run lint
+npm run build
+cd ..
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
+```
