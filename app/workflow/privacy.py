@@ -3,7 +3,17 @@ from typing import Any
 
 def mask_sensitive(value: Any) -> Any:
     """Return a copy; never log request/response bodies or exception input values."""
-    sensitive = {"name", "birth_date", "address", "insurance_number", "account_number"}
+    sensitive = {
+        "name",
+        "birth_date",
+        "address",
+        "insurance_number",
+        "account_number",
+        "insurer_number",
+        "symbol",
+        "number",
+        "raw_text",
+    }
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
