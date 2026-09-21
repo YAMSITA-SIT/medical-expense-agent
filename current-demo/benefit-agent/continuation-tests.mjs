@@ -1,0 +1,12 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {psychiatricCase,autoAnnualCase} from './continuation-fixtures.mjs';import {processCase} from './process.mjs';import {apportion} from './allocation.mjs';import {applyReviewedFact} from './follow-up.mjs';import {DecisionAgent} from './decision-agent.mjs';
+test('配分額の端数を最低配分額へ集める',()=>assert.deepEqual(apportion(16400,[14000,60000]),[3103,13297]));
+test('端数がある最小額同額は独断で割り当てない',()=>assert.throws(()=>apportion(1,[1,1])));
+test('精神通院と対象外の歯科を分ける',()=>{const r=processCase(psychiatricCase());assert.deepEqual(r.findings,[]);assert.equal(r.total_additional,4000);});
+test('精神通院の上限なし区分は一割負担と保険給付を比較',()=>assert.equal(processCase(psychiatricCase('NO_CAP')).total_additional,4000));
+test('指定薬局を対象診療として合算',()=>assert.equal(processCase(psychiatricCase('PHARMACY')).total_additional,6000));
+test('未認定を給付なしと断定しない',()=>assert.equal(processCase(psychiatricCase('CERTIFICATE')).total_additional,null));
+test('公費混在の対象範囲不足は停止',()=>{const r=psychiatricCase();delete r.payload.facts.public_aid_review.coverage;assert.equal(processCase(r).total_additional,null);});
+test('旧外来年間・単独者の入院外来配分を自動化',()=>{const r=processCase(autoAnnualCase());assert.deepEqual(r.findings,[]);assert.equal(r.monthly.entitlement,20400);assert.equal(r.annual.outpatient_entitlement,15516);assert.equal(r.annual.trace[0].allocations[0].monthly_entitlement,4707);});
+test('確認済み回答登録→再処理を行い履歴を保持',()=>{const row=psychiatricCase('CERTIFICATE');const complete=psychiatricCase('MIXED');const ready=psychiatricCase('NO_CAP');const base=psychiatricCase('CERTIFICATE');const cert=structuredClone(ready.payload.facts.public_aid_review);cert.basis=ready.payload.facts.public_aid_review.basis;const payload=applyReviewedFact(base,{key:'public_aid_review',value:cert,evidence:'RECEIVED-CERT',reviewer:'DEMO-STAFF',confirmed:true});const r=processCase({...row,revision:2,payload});assert.equal(r.total_additional,4000);assert.equal(payload.review_history.length,1);assert.equal(payload.review_history[0].previous,null);});
+test('確認なしの回答は認定情報を更新しない',()=>assert.throws(()=>applyReviewedFact(psychiatricCase('CERTIFICATE'),{key:'income',value:{},evidence:'x',reviewer:'x',confirmed:false})));
+test('検索後に定型確認案を作るが送信しない',async()=>{const a=new DecisionAgent({documents:{loadKnowledge:async()=>[]}});const r=await a.run(psychiatricCase('CERTIFICATE'));assert.equal(r.state,'PAUSED_AFTER_DOCUMENT_SEARCH');assert.equal(r.next_actions[0].sent,false);assert.match(r.next_actions[0].required_evidence,/受給者証/);});

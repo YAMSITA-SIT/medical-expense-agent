@@ -1,0 +1,8 @@
+<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>医療費還付｜職員向けデモ</title><link rel="stylesheet" href="/style.css"><body><main>
+<header><p>職員向け・架空データ専用</p><h1>医療費の還付見込みを確認</h1><p>明細を確認して処理を開始すると、登録済みの資格・所得・世帯・履歴を照会します。</p></header>
+<section><label for="case">案件を選択</label><select id="case"><option>読込中…</option></select><p id="meta"></p></section>
+<section><h2>明細情報</h2><p>修正できます。空欄はDBに確認済みの情報があれば補完します。DBと異なる値は確認事項になります。</p><form id="form"><div id="receipts"></div><button id="run" type="submit" disabled>処理開始</button><span id="status" role="status" aria-live="polite"></span></form></section>
+<section><h2>DBから取得した関連情報</h2><div id="related"></div></section>
+<section id="result" hidden aria-live="polite"><h2>判定結果</h2><div id="answer"></div></section>
+<details><summary>32パターンの対応状況・このデモの範囲</summary><p>月額の通常計算を検証する開発版です。年間上限・専門条件の一部は自動算定せず、確認が必要な結果を返します。正式な支給決定・送金・照会送信は行いません。</p><div id="coverage"></div></details>
+</main><script type="module" src="/app.js"></script></body></html>
