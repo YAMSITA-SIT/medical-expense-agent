@@ -32,10 +32,22 @@
 | **制度ルールの管理** | 過去の学習データ依存（古い法改正に対応できないリスク） | **プログラム・ルールエンジン側で法改正に対応** |
 
 
+ 起動手順
+
+ バックエンド（サーバー）の起動
+ターミナルを開き、プロジェクトのルートディレクトリで以下を実行します。
+
+
+python -m venv venv
+.\venv\Scripts\Activate.ps1    # Macの場合は source venv/bin/activate
+pip install .
+uvicorn app.main:app --reload --port 8001
+
+
 
 
 ```bash
-# 仮想環境の作成と有効化
+仮想環境の作成と有効化
 python -m venv venv
 .\venv\Scripts\Activate.ps1   # Windowsの場合（Mac/Linuxは source venv/bin/activate）
 
