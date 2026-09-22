@@ -31,4 +31,18 @@
 | **ユーザー負担** | 前提条件や制度ルールをユーザー自身が把握・入力 | **OCRと対話型フォームで最短入力** |
 | **制度ルールの管理** | 過去の学習データ依存（古い法改正に対応できないリスク） | **プログラム・ルールエンジン側で法改正に対応** |
 
----
+
+
+
+```bash
+# 仮想環境の作成と有効化
+python -m venv venv
+.\venv\Scripts\Activate.ps1   # Windowsの場合（Mac/Linuxは source venv/bin/activate）
+
+# 依存パッケージのインストールとサーバー起動
+pip install .
+uvicorn app.main:app --reload --port 8001
+
+cd frontend
+npm install
+npm run dev
